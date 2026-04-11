@@ -71,10 +71,12 @@ class MascotWindow(QWidget):
         
         shadow_layout = QVBoxLayout(self.shadow_container)
         shadow_layout.setContentsMargins(0, 0, 0, 0)
+        shadow_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # 2. Inner Container for the Pulsing Opacity
+        # 2. Inner Container for the Pulsing Opacity (The Bubble)
         self.container = QWidget()
         self.container.setObjectName("MascotContainer")
+        self.container.setFixedSize(100, 100) # Fixed bubble size
         self.opacity_effect = QGraphicsOpacityEffect(self.container)
         self.container.setGraphicsEffect(self.opacity_effect)
         
@@ -86,16 +88,18 @@ class MascotWindow(QWidget):
         self.pulse_anim.setLoopCount(-1)
 
         container_layout = QVBoxLayout(self.container)
+        container_layout.setContentsMargins(0, 0, 0, 0) # No internal padding
         container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Mascot Emoji
         self.icon_label = QLabel(MASCOT_DISPLAY[self._state])
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setStyleSheet(f"font-size: 60px; background: transparent;")
+        self.icon_label.setStyleSheet(f"font-size: 64px; background: transparent; line-height: 100px;")
         
         container_layout.addWidget(self.icon_label)
         shadow_layout.addWidget(self.container)
         self.layout.addWidget(self.shadow_container)
+        self.layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.set_state(MascotState.IDLE)
 
