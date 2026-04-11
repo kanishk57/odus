@@ -15,7 +15,6 @@ import asyncio
 import logging
 import sys
 
-import flet as ft
 from dotenv import load_dotenv
 
 from odus.perception.hotkey import HotkeyListener
@@ -34,12 +33,16 @@ logging.basicConfig(
 logger = logging.getLogger("odus")
 
 
-async def app_main(page: ft.Page) -> None:
-    """Flet async entry point — sets up all subsystems."""
+from PyQt6.QtWidgets import QApplication
+import qasync
 
-    # 1. Initialize UI
+async def app_main() -> None:
+    """PyQt6 async entry point — sets up all subsystems."""
+
+    # 1. Initialize UI (creates PyQt windows)
+    from odus.ui.app import OdusApp
     odus_app = OdusApp()
-    await odus_app.start(page)
+    odus_app.start()
 
     # 2. Start the agentic loop (runs in background)
     agent = Agent()
@@ -55,7 +58,14 @@ async def app_main(page: ft.Page) -> None:
 def main() -> None:
     """CLI entry point."""
     try:
-        ft.app(target=app_main)
+        app = QApplication(sys.argv)
+        loop = qasync.QEventLoop(app)
+        asyncio.set_event_loop(loop)
+        
+        with loop:
+            loop.run_until_complete(app_main())
+            loop.run_forever()
+            
     except KeyboardInterrupt:
         logger.info("Odus shutting down...")
         sys.exit(0)

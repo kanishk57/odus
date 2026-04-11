@@ -1,115 +1,106 @@
 """
-Ghost Terminal — scrollable terminal output visualizer.
-
-DEV 3 owns this module.
-
-Displays analysis results, command outputs, and streaming tokens
-in a terminal-like panel with syntax highlighting.
+Ghost Terminal — scrollable terminal output visualizer in PyQt6.
 """
-
-from __future__ import annotations
 
 import logging
 from datetime import datetime
 
-import flet as ft
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit, QLabel
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QColor, QIcon
 
-from odus.ui.theme import Colors, FontSizes, Fonts, Spacing, Radii
+from odus.ui.theme import Colors, FontSizes, Fonts, Radii
 
 logger = logging.getLogger(__name__)
 
 
-class GhostTerminal(ft.Container):
+class GhostTerminal(QWidget):
     """
-    Terminal-like output display for the Odus UI.
-
-    Features:
-      - Scrollable output log
-      - Color-coded entries (info, success, error, warning, command)
-      - Monospace font
-      - Auto-scroll to bottom on new content
-
-    Usage:
-        terminal = GhostTerminal()
-        terminal.add_info("Analyzing screenshot...")
-        terminal.add_success("Found a fix!")
-        terminal.add_command("sudo apt install vim")
-        terminal.add_output("Reading package lists... Done")
-        terminal.add_error("Permission denied")
+    Terminal-like output display for the Odus UI in PyQt6.
+    Uses QTextEdit with HTML appending for colors.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._entries: list[ft.Control] = []
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("GhostTerminal")
+        
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
 
-        # The scrollable column of terminal entries
-        self._output = ft.Column(
-            controls=[],
-            scroll=ft.ScrollMode.AUTO,
-            spacing=2,
-            auto_scroll=True,
-        )
+        # Header
+        self.header = QWidget()
+        self.header.setObjectName("TerminalHeader")
+        header_layout = QHBoxLayout(self.header)
+        header_layout.setContentsMargins(15, 10, 15, 10)
+        
+        title = QLabel("Ghost Terminal")
+        title.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-weight: bold;")
+        title.setFont(QFont(Fonts.MONO, FontSizes.SM))
+        
+        self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setObjectName("ClearBtn")
+        self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_btn.clicked.connect(self.clear)
+        
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        header_layout.addWidget(self.clear_btn)
 
-        # Terminal header bar
-        self._header = ft.Container(
-            content=ft.Row(
-                [
-                    ft.Icon(ft.Icons.TERMINAL, size=14, color=Colors.TEXT_SECONDARY),
-                    ft.Text(
-                        "Ghost Terminal",
-                        size=FontSizes.XS,
-                        color=Colors.TEXT_SECONDARY,
-                        font_family=Fonts.MONO,
-                        weight=ft.FontWeight.BOLD,
-                    ),
-                    ft.Container(expand=True),
-                    ft.TextButton(
-                        "Clear",
-                        on_click=self._on_clear,
-                        style=ft.ButtonStyle(
-                            color=Colors.TEXT_SECONDARY,
-                        ),
-                    ),
-                ],
-                alignment=ft.MainAxisAlignment.START,
-                spacing=Spacing.SM,
-            ),
-            padding=ft.padding.symmetric(horizontal=Spacing.MD, vertical=Spacing.SM),
-            border=ft.border.only(bottom=ft.BorderSide(1, Colors.BORDER)),
-        )
+        # Output Area
+        self.output = QTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setObjectName("TerminalOutput")
+        font = QFont(Fonts.MONO, FontSizes.SM)
+        self.output.setFont(font)
+        self.output.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
 
-        # Assemble the terminal container
-        self.content = ft.Column(
-            [self._header, self._output],
-            spacing=0,
-            expand=True,
-        )
-        self.bgcolor = Colors.TERMINAL_BG
-        self.border_radius = Radii.MD
-        self.border = ft.border.all(1, Colors.BORDER)
-        self.padding = 0
-        self.expand = True
+        self.layout.addWidget(self.header)
+        self.layout.addWidget(self.output)
+
+        self._apply_styles()
+
+    def _apply_styles(self):
+        self.setStyleSheet(f"""
+            QWidget#GhostTerminal {{
+                background-color: {Colors.TERMINAL_BG};
+                border-radius: {Radii.MD}px;
+                border: 1px solid {Colors.BORDER};
+            }}
+            QWidget#TerminalHeader {{
+                border-bottom: 1px solid {Colors.BORDER};
+            }}
+            QPushButton#ClearBtn {{
+                color: {Colors.TEXT_SECONDARY};
+                background: transparent;
+                border: none;
+            }}
+            QPushButton#ClearBtn:hover {{
+                color: {Colors.TEXT_PRIMARY};
+            }}
+            QTextEdit#TerminalOutput {{
+                background-color: transparent;
+                color: {Colors.TERMINAL_TEXT};
+                border: none;
+                padding: 10px;
+            }}
+        """)
 
     # ── Public API ──────────────────────────────────────────────────────
 
     def add_info(self, text: str) -> None:
-        """Add an informational message (gray)."""
         self._add_entry(text, Colors.TERMINAL_TEXT, "›")
 
     def add_success(self, text: str) -> None:
-        """Add a success message (green)."""
         self._add_entry(text, Colors.TERMINAL_GREEN, "✓")
 
     def add_error(self, text: str) -> None:
-        """Add an error message (red)."""
         self._add_entry(text, Colors.TERMINAL_RED, "✗")
 
     def add_warning(self, text: str) -> None:
-        """Add a warning message (yellow)."""
         self._add_entry(text, Colors.TERMINAL_YELLOW, "⚠")
 
     def add_command(self, command: str) -> None:
-        """Add a command being executed (blue, bold)."""
         self._add_entry(
             f"$ {command}",
             Colors.TERMINAL_BLUE,
@@ -118,24 +109,14 @@ class GhostTerminal(ft.Container):
         )
 
     def add_output(self, text: str) -> None:
-        """Add raw command output (dim)."""
         for line in text.strip().split("\n"):
-            self._add_entry(line, Colors.TEXT_SECONDARY, " ")
+            self._add_entry(line, Colors.TEXT_SECONDARY, "&nbsp;&nbsp;")
 
     def add_divider(self) -> None:
-        """Add a visual separator line."""
-        self._output.controls.append(
-            ft.Container(
-                content=ft.Divider(height=1, color=Colors.BORDER),
-                padding=ft.padding.symmetric(horizontal=Spacing.MD, vertical=Spacing.XS),
-            )
-        )
-        self._output.update()
+        self.output.append(f"<hr style='border: 1px solid {Colors.BORDER}; margin: 5px 0;'>")
 
     def clear(self) -> None:
-        """Clear all terminal output."""
-        self._output.controls.clear()
-        self._output.update()
+        self.output.clear()
 
     # ── Private ─────────────────────────────────────────────────────────
 
@@ -146,44 +127,21 @@ class GhostTerminal(ft.Container):
         prefix: str = "›",
         bold: bool = False,
     ) -> None:
-        """Add a single timestamped entry to the terminal."""
         timestamp = datetime.now().strftime("%H:%M:%S")
-
-        entry = ft.Container(
-            content=ft.Row(
-                [
-                    ft.Text(
-                        timestamp,
-                        size=FontSizes.XS,
-                        color=Colors.TEXT_SECONDARY,
-                        font_family=Fonts.MONO,
-                        opacity=0.5,
-                    ),
-                    ft.Text(
-                        prefix,
-                        size=FontSizes.SM,
-                        color=color,
-                        font_family=Fonts.MONO,
-                    ),
-                    ft.Text(
-                        text,
-                        size=FontSizes.SM,
-                        color=color,
-                        font_family=Fonts.MONO,
-                        weight=ft.FontWeight.BOLD if bold else ft.FontWeight.NORMAL,
-                        selectable=True,
-                        expand=True,
-                    ),
-                ],
-                spacing=Spacing.SM,
-                vertical_alignment=ft.CrossAxisAlignment.START,
-            ),
-            padding=ft.padding.symmetric(horizontal=Spacing.MD, vertical=2),
-        )
-
-        self._output.controls.append(entry)
-        self._output.update()
-
-    def _on_clear(self, e) -> None:
-        """Handle clear button click."""
-        self.clear()
+        weight = "bold" if bold else "normal"
+        
+        # Escape HTML chars in text
+        escaped_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        
+        html = f"""
+        <div style='margin-bottom: 4px; white-space: pre;'>
+            <span style='color: rgba(255,255,255,0.4); font-size: 11px;'>{timestamp}</span>
+            <span style='color: {color}; margin-left: 8px;'>{prefix}</span>
+            <span style='color: {color}; font-weight: {weight}; margin-left: 8px;'>{escaped_text}</span>
+        </div>
+        """
+        self.output.append(html)
+        
+        # Scroll to bottom
+        scrollbar = self.output.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())

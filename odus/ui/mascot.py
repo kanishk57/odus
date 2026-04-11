@@ -1,26 +1,19 @@
 """
-Mascot State Machine — controls the mascot's visual state and animations.
-
-DEV 3 owns this module.
-
-States: IDLE → THINKING → SUCCESS / ERROR / WARNING → IDLE
+Mascot State Machine — controls the mascot's visual state and animations in PyQt6.
 """
-
-from __future__ import annotations
 
 import logging
 from enum import Enum
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
 
-import flet as ft
-
-from odus.ui.theme import Colors, FontSizes, Spacing, Radii
+from odus.ui.theme import Colors, FontSizes, Radii
 
 logger = logging.getLogger(__name__)
 
 
 class MascotState(Enum):
-    """Visual states of the Odus mascot."""
-
     IDLE = "idle"
     THINKING = "thinking"
     SUCCESS = "success"
@@ -28,21 +21,12 @@ class MascotState(Enum):
     WARNING = "warning"
 
 
-# Mascot emoji representations (to be replaced with actual sprites)
 MASCOT_DISPLAY = {
     MascotState.IDLE: "🦉",
     MascotState.THINKING: "🔍",
     MascotState.SUCCESS: "✅",
     MascotState.ERROR: "❌",
     MascotState.WARNING: "⚠️",
-}
-
-MASCOT_MESSAGES = {
-    MascotState.IDLE: "Ready to help! Press Ctrl+Shift+O to capture.",
-    MascotState.THINKING: "Analyzing your screen...",
-    MascotState.SUCCESS: "Found a fix!",
-    MascotState.ERROR: "Something went wrong.",
-    MascotState.WARNING: "This needs your attention.",
 }
 
 MASCOT_COLORS = {
@@ -54,94 +38,82 @@ MASCOT_COLORS = {
 }
 
 
-class MascotController(ft.Column):
+class MascotWindow(QWidget):
     """
-    Flet control that displays the mascot with state-driven visuals.
-
-    Usage:
-        mascot = MascotController()
-        mascot.set_state(MascotState.THINKING)
+    Floating mascot widget that stays on top and is fully transparent.
     """
+    
+    clicked = pyqtSignal()
 
-    def __init__(self, on_click=None) -> None:
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._state = MascotState.IDLE
-        self.on_click = on_click
 
-        # Mascot icon (large emoji placeholder — replace with Image later)
-        self._icon = ft.Text(
-            value=MASCOT_DISPLAY[MascotState.IDLE],
-            size=72,
-            text_align=ft.TextAlign.CENTER,
+        # Window Setup (Frameless, Transparent, Always on Top)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool  # Prevents showing in taskbar optionally
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        # Status message
-        self._message = ft.Text(
-            value=MASCOT_MESSAGES[MascotState.IDLE],
-            size=FontSizes.SM,
-            color=Colors.TEXT_SECONDARY,
-            text_align=ft.TextAlign.CENTER,
-            width=220,
-        )
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(10, 10, 10, 10)
 
-        # Thinking indicator (animated dots)
-        self._progress = ft.ProgressRing(
-            width=24,
-            height=24,
-            stroke_width=2,
-            color=Colors.ACCENT,
-            visible=False,
-        )
+        # Bubble Container
+        self.container = QWidget()
+        self.container.setObjectName("MascotContainer")
+        self.container.setFixedSize(120, 120)
+        
+        # Shadow effect
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 2)
+        self.container.setGraphicsEffect(shadow)
 
-        # Wrap in a Container for click and styling
-        self._mascot_container = ft.Container(
-            content=ft.Column(
-                [
-                    self._icon,
-                    self._progress,
-                    self._message,
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                alignment=ft.MainAxisAlignment.CENTER,
-                spacing=Spacing.SM,
-            ),
-            bgcolor=Colors.BG_SECONDARY,
-            border_radius=Radii.LG,
-            padding=Spacing.MD,
-            border=ft.border.all(1, Colors.BORDER),
-            shadow=ft.BoxShadow(
-                blur_radius=15,
-                spread_radius=1,
-                color="#4D000000",
-            ),
-            on_click=self._on_click_handler,
-        )
+        container_layout = QVBoxLayout(self.container)
+        container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Layout
-        self.horizontal_alignment = ft.CrossAxisAlignment.CENTER
-        self.alignment = ft.MainAxisAlignment.CENTER
-        self.controls = [self._mascot_container]
+        # Mascot Emoji
+        self.icon_label = QLabel(MASCOT_DISPLAY[self._state])
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setStyleSheet(f"font-size: 60px; background: transparent;")
+        
+        container_layout.addWidget(self.icon_label)
+        self.layout.addWidget(self.container)
 
-    def _on_click_handler(self, e):
-        if self.on_click:
-            self.on_click(e)
+        self.set_state(MascotState.IDLE)
+        
+        # Determine position (e.g., bottom right)
+        # We will set position from app.py
+
+    def mousePressEvent(self, event):
+        """Detect clicks to expand UI."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            
+    def mouseMoveEvent(self, event):
+        """Allow dragging if desired, though usually it just floats."""
+        pass
 
     @property
     def state(self) -> MascotState:
         return self._state
 
     def set_state(self, state: MascotState) -> None:
-        """Transition to a new mascot state."""
-        if state == self._state:
-            return
-
-        logger.debug("Mascot: %s → %s", self._state.value, state.value)
+        """Update mascot appearance."""
         self._state = state
-
-        self._icon.value = MASCOT_DISPLAY[state]
-        self._message.value = MASCOT_MESSAGES[state]
-        self._message.color = MASCOT_COLORS[state]
-        self._progress.visible = (state == MascotState.THINKING)
-        self._progress.color = MASCOT_COLORS[state]
-
-        self.update()
+        self.icon_label.setText(MASCOT_DISPLAY[state])
+        
+        color = MASCOT_COLORS[state]
+        radius = Radii.LG
+        
+        # Update styling
+        self.container.setStyleSheet(f"""
+            QWidget#MascotContainer {{
+                background-color: {Colors.BG_SECONDARY};
+                border: 2px solid {color};
+                border-radius: {radius}px;
+            }}
+        """)
