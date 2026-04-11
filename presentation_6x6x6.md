@@ -10,18 +10,18 @@
 
 ---
 
-## Slide 2: UI & Frontend Infrastructure (DEV 3 Layer)
-**Framework:** Flet (Flutter-powered Python desktop UI framework) bound directly to native OS views.
+## Slide 2: UI & Frontend Infrastructure 
+**Framework:** PyQt6 bound directly to native OS views, operating asynchronously via `qasync`.
 **Key Components & Tools:**
-- **Ghost Terminal:** Async scrollable terminal using `JetBrains Mono`. Color-codes events and command outputs (`add_success`, `add_warning`, `add_command`).
+- **Chat Interface & Ghost Terminal:** Qt-based scrollable UI blending Glassmorphism (`MessageBubble`) chat and monospace terminal events (`JetBrains Mono`). Color-codes events and command outputs.
 - **Dynamic Mascot Agent:** A state-machine interface reacting to application states (IDLE, THINKING, SUCCESS, ERROR, WARNING) using responsive graphical sprites.
 - **Streaming Pipeline:** Captures `ANALYSIS_STREAMING` event bus payloads to display raw AI tokens in real-time.
-- **Design Token System:** Hardcoded palette managed through `Colors`, `Fonts` (hotloaded via Google Fonts CDN).
+- **Design Token System:** Hardcoded palette managed through `Colors` and mapped natively utilizing Qt Fonts, removing web-based CDN overhead.
 - **Offline Demo Engine:** Scripted local fallback generator decoupling the frontend from the API loop for testing.
 
 ---
 
-## Slide 3: Perception & Capture System (DEV 1 Layer)
+## Slide 3: Perception & Capture System 
 **Responsibility:** Fetching visual server telemetry and registering OS-level keyboard hooks across display servers.
 **Key Components & Tools:**
 - **X11 Capture:** Uses the `mss` library for high-speed screenshot frames interacting with X server APIs.
@@ -31,7 +31,7 @@
 
 ---
 
-## Slide 4: Action & Sandboxing Engine (DEV 1 Layer)
+## Slide 4: Action & Sandboxing Engine 
 **Responsibility:** Secure, isolated execution of AI-generated shell remediation scripts.
 **Key Components & Tools:**
 - **Subprocess Engine:** Routes commands via wrapped subprocess implementations using strict CPU/Execution timeouts.
@@ -44,7 +44,7 @@
 
 ---
 
-## Slide 5: AI Logic & Agentic Orchestration (DEV 2 Layer)
+## Slide 5: AI Logic & Agentic Orchestration 
 **Responsibility:** Core logic loop driving the `google-genai` Google AI Studio SDK.
 **Key Components & Tools:**
 - **Dual-Model Escalation Pipeline:** Triggers base analysis via the lightning-fast `gemini-2.5-flash`; automatically escalates the frame buffer to the heavier `gemini-2.5-pro` model if the confidence probability score drops below `< 0.6`.
