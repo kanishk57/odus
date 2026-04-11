@@ -112,7 +112,7 @@ class ScreenCapture:
             img = img.resize(new_size, Image.LANCZOS)
 
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=jpeg_quality)
+        img.convert("RGB").save(buf, format="JPEG", quality=jpeg_quality)
         compressed = buf.getvalue()
 
         logger.debug(
