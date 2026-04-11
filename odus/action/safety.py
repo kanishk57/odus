@@ -125,3 +125,87 @@ class SafetyGate:
     def is_blocked(self, command: str) -> bool:
         """Quick check: is this command blocked?"""
         return self.classify(command) == SafetyVerdict.BLOCKED
+
+    # ── GUI / Input Action Classification ──────────────────────────────
+
+    # Actions that are always safe (read-only / visual feedback)
+    _SAFE_ACTIONS = frozenset({
+        "highlight", "highlight_area",
+        "scroll", "scroll_screen",
+    })
+
+    # Actions that always need user confirmation
+    _CAUTION_ACTIONS = frozenset({
+        "click", "move_and_click",
+        "double_click",
+        "right_click",
+        "type_text",
+        "press_key",
+        "hotkey",
+        "drag", "drag_element",
+    })
+
+    # Keywords in target descriptions that trigger a BLOCKED verdict
+    _DANGER_TARGET_PATTERNS: list[re.Pattern] = [
+        re.compile(p, re.IGNORECASE)
+        for p in [
+            r"password",
+            r"sudo\s+prompt",
+            r"authentication",
+            r"polkit",
+            r"keyring",
+            r"credential",
+            r"security\s+settings",
+            r"firewall",
+            r"root\s+terminal",
+            r"disk\s+management",
+            r"format\s+partition",
+        ]
+    ]
+
+    def classify_input_action(
+        self,
+        action_type: str,
+        target_description: str = "",
+    ) -> SafetyVerdict:
+        """
+        Classify a GUI / input action's safety tier.
+
+        Args:
+            action_type: The action name (e.g. 'click', 'type_text', 'highlight').
+            target_description: Free-text description of the target element
+                                (e.g. 'Save button in Firefox').
+
+        Returns:
+            SafetyVerdict — SAFE, NEEDS_CONFIRMATION, or BLOCKED.
+        """
+        action_lower = action_type.lower().strip()
+
+        # 1. Check dangerous targets first (highest priority)
+        if target_description:
+            for pattern in self._DANGER_TARGET_PATTERNS:
+                if pattern.search(target_description):
+                    logger.warning(
+                        "🚫 BLOCKED input action '%s' — target '%s' "
+                        "matched danger pattern '%s'",
+                        action_lower, target_description, pattern.pattern,
+                    )
+                    return SafetyVerdict.BLOCKED
+
+        # 2. Always-safe actions
+        if action_lower in self._SAFE_ACTIONS:
+            logger.debug("✅ SAFE input action: %s", action_lower)
+            return SafetyVerdict.SAFE
+
+        # 3. Caution actions — need user confirmation
+        if action_lower in self._CAUTION_ACTIONS:
+            logger.info(
+                "⚠️  CAUTION input action: %s (target: %s)",
+                action_lower, target_description or "unspecified",
+            )
+            return SafetyVerdict.NEEDS_CONFIRMATION
+
+        # 4. Unknown actions — default to caution
+        logger.info("⚠️  Unknown input action '%s' — defaulting to CAUTION", action_lower)
+        return SafetyVerdict.NEEDS_CONFIRMATION
+

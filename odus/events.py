@@ -35,6 +35,19 @@ class EventType(Enum):
     USER_CONFIRMED = "user_confirmed"
     USER_DENIED = "user_denied"
 
+    # Input action events (agentic desktop control)
+    INPUT_ACTION_PLANNED = "input_action_planned"       # Agent wants to perform a GUI action
+    INPUT_ACTION_CONFIRMED = "input_action_confirmed"   # User approved the GUI action
+    INPUT_ACTION_EXECUTING = "input_action_executing"   # GUI action in progress
+    INPUT_ACTION_DONE = "input_action_done"             # GUI action completed
+    INPUT_ACTION_FAILED = "input_action_failed"         # GUI action failed
+
+    # Multi-step agent plan events
+    AGENT_PLAN_CREATED = "agent_plan_created"           # Agent produced a multi-step plan
+    AGENT_STEP_STARTED = "agent_step_started"           # Starting a plan step
+    AGENT_STEP_DONE = "agent_step_done"                 # Step completed successfully
+    AGENT_PLAN_DONE = "agent_plan_done"                 # All plan steps finished
+
     # System events
     ERROR = "error"
     STATUS_UPDATE = "status_update"

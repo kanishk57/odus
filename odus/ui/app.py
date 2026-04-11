@@ -14,6 +14,7 @@ from PyQt6.QtCore import Qt, QObject
 from odus.events import EventType, OdusEvent, get_event_bus
 from odus.ui.chat_interface import ChatInterface
 from odus.ui.mascot import MascotWindow, MascotState
+from odus.ui.overlay import ActionOverlay
 from odus.ui.theme import Colors
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,9 @@ class OdusApp(QObject):
         self._terminal.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self._terminal.resize(450, 650)
         
+        # 3. Action Overlay (Transparent fullscreen for visual cues)
+        self._overlay = ActionOverlay()
+
         # Mascot Actions
         self._mascot_win.exit_requested.connect(self._app.quit)
         self._mascot_win.toggle_terminal_requested.connect(self._toggle_terminal)
@@ -56,6 +60,9 @@ class OdusApp(QObject):
         # Chat Actions
         # Connect input_submitted to the event bus for future AI interaction
         self._terminal.input_submitted.connect(self._on_user_query)
+        
+        # Desktop action confirmations from inline chat buttons
+        self._terminal.action_confirmed.connect(self._on_action_confirmed)
 
 
     def start(self) -> None:
@@ -79,6 +86,13 @@ class OdusApp(QObject):
             self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED, {"query": query}))
         )
 
+    def _on_action_confirmed(self, action_data: dict) -> None:
+        """User approved an inline desktop action in the chat."""
+        asyncio.ensure_future(
+            self._bus.emit(OdusEvent(EventType.INPUT_ACTION_CONFIRMED, {
+                "action": action_data,
+            }))
+        )
 
     def _toggle_terminal(self) -> None:
         if self._terminal.isVisible():
@@ -216,6 +230,89 @@ class OdusApp(QObject):
                     color=Colors.DANGER
                 )
 
+        # ── Multi-Step Plan Events ─────────────────────────────────────
+
+        elif event.type == EventType.AGENT_PLAN_CREATED:
+            self._mascot_win.set_state(MascotState.THINKING)
+            self._show_terminal()
+            payload = event.payload
+            self._terminal.add_action_plan(
+                summary=payload.get("explanation", payload.get("summary", "")),
+                steps=payload.get("plan", []),
+            )
+
+        elif event.type == EventType.AGENT_STEP_STARTED:
+            step = event.payload.get("step", 0)
+            self._terminal.update_action_step(step, "running")
+
+        elif event.type == EventType.AGENT_STEP_DONE:
+            step = event.payload.get("step", 0)
+            self._terminal.update_action_step(step, "done")
+
+        elif event.type == EventType.AGENT_PLAN_DONE:
+            self._mascot_win.set_state(MascotState.SUCCESS)
+            total = event.payload.get("total_steps", 0)
+            self._terminal.add_system_log(
+                f"✅ All {total} steps completed!",
+                color=Colors.SUCCESS,
+            )
+
+        # ── Input Action Events ────────────────────────────────────────
+
+        elif event.type == EventType.INPUT_ACTION_PLANNED:
+            self._mascot_win.set_state(MascotState.WARNING)
+            self._show_terminal()
+            payload = event.payload
+            action = payload.get("action", {})
+            action_type = action.get("action_type", "")
+            explanation = action.get("explanation", "")
+
+            # Show visual overlay at target coordinates
+            if action_type == "move_and_click":
+                x = action.get("x", 0)
+                y = action.get("y", 0)
+                target = action.get("target_description", "")
+                self._overlay.show_crosshair(x, y, label=f"Click: {target}")
+
+            elif action_type == "highlight_area":
+                self._overlay.show_highlight(
+                    x=action.get("x", 0),
+                    y=action.get("y", 0),
+                    w=action.get("width", 100),
+                    h=action.get("height", 100),
+                    label=explanation,
+                )
+
+            # Show inline confirmation in chat
+            desc = f"{action_type}: {explanation}"
+            self._terminal.add_action_confirmation(desc, payload)
+
+        elif event.type == EventType.INPUT_ACTION_EXECUTING:
+            self._terminal.add_system_log(
+                f"🎯 Executing: {event.payload.get('description', '')}",
+                color=Colors.ACCENT,
+            )
+
+        elif event.type == EventType.INPUT_ACTION_DONE:
+            self._overlay.dismiss()
+            self._mascot_win.set_state(MascotState.SUCCESS)
+            result = event.payload.get("result", {})
+            self._terminal.add_system_log(
+                f"✅ {result.get('description', 'Action completed')}",
+                color=Colors.SUCCESS,
+            )
+
+        elif event.type == EventType.INPUT_ACTION_FAILED:
+            self._overlay.dismiss()
+            self._mascot_win.set_state(MascotState.ERROR)
+            step = event.payload.get("step", "")
+            reason = event.payload.get("reason", "Unknown error")
+            prefix = f"Step {step}: " if step else ""
+            self._terminal.add_system_log(
+                f"❌ {prefix}{reason}",
+                color=Colors.DANGER,
+            )
+
         elif event.type == EventType.ERROR:
             self._mascot_win.set_state(MascotState.ERROR)
             self._show_terminal()
@@ -228,4 +325,3 @@ class OdusApp(QObject):
             self._terminal.add_system_log(
                 event.payload.get("message", "")
             )
-

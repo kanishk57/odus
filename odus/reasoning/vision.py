@@ -4,7 +4,8 @@ Gemini Vision API Client.
 DEV 2 owns this module.
 
 Sends compressed screenshots to Gemini 2.5 Flash/Pro and returns
-structured AnalysisResult objects.
+structured AnalysisResult objects. Now supports multi-step action plans
+with both CLI commands and desktop control actions.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SuggestedCommand:
-    """A single command suggested by the AI."""
+    """A single command suggested by the AI (legacy format)."""
 
     command: str
     description: str
@@ -38,6 +39,7 @@ class AnalysisResult:
     summary: str
     explanation_for_user: str
     suggested_commands: list[SuggestedCommand] = field(default_factory=list)
+    plan: list[dict] = field(default_factory=list)  # Multi-step action plan
     confidence: float = 0.0
     follow_up_hint: str = ""
     raw_response: str = ""  # Full text for debugging
@@ -135,6 +137,18 @@ class VisionAnalyzer:
 
             data = json.loads(text)
 
+            # Parse multi-step plan (new format)
+            plan = []
+            for step in data.get("plan", []):
+                plan.append({
+                    "step": step.get("step", 0),
+                    "action_type": step.get("action_type", ""),
+                    "params": step.get("params", {}),
+                    "description": step.get("description", ""),
+                    "safety_tier": step.get("safety_tier", 2),
+                })
+
+            # Parse legacy suggested_commands (backward compat)
             commands = []
             for cmd in data.get("suggested_commands", []):
                 commands.append(
@@ -149,6 +163,7 @@ class VisionAnalyzer:
                 summary=data.get("summary", "No summary"),
                 explanation_for_user=data.get("explanation_for_user", ""),
                 suggested_commands=commands,
+                plan=plan,
                 confidence=float(data.get("confidence", 0.0)),
                 follow_up_hint=data.get("follow_up_hint", ""),
                 raw_response=raw_text,

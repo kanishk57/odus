@@ -62,6 +62,7 @@ class ChatInterface(QWidget):
     """
     
     input_submitted = pyqtSignal(str)
+    action_confirmed = pyqtSignal(dict)  # Emitted when user approves a desktop action
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -227,11 +228,115 @@ class ChatInterface(QWidget):
         self.chat_layout.addWidget(log_label)
         self._scroll_to_bottom()
 
+    def add_action_plan(self, summary: str, steps: list[dict]) -> None:
+        """Display a multi-step action plan from the agent."""
+        # Plan header
+        self.add_ai_message(summary)
+
+        # Render each step
+        self._step_widgets = {}
+        for step in steps:
+            step_num = step.get("step", 0)
+            total = len(steps)
+            action_type = step.get("action_type", "unknown")
+            description = step.get("description", "")
+            widget = ActionStepWidget(step_num, total, action_type, description)
+            self._step_widgets[step_num] = widget
+            self.chat_layout.addWidget(widget)
+
+        self._scroll_to_bottom()
+
+    def update_action_step(self, step_num: int, status: str) -> None:
+        """
+        Update a step's visual status.
+
+        Args:
+            step_num: Step number (1-indexed).
+            status: 'pending', 'running', 'done', 'failed', 'blocked'.
+        """
+        widget = getattr(self, '_step_widgets', {}).get(step_num)
+        if widget:
+            widget.set_status(status)
+            self._scroll_to_bottom()
+
+    def add_action_confirmation(self, description: str, action_data: dict) -> None:
+        """Show an inline approval request for a desktop action."""
+        container = QFrame()
+        container.setObjectName("ConfirmAction")
+        container.setStyleSheet(f"""
+            QFrame#ConfirmAction {{
+                background-color: {Colors.BG_ELEVATED};
+                border-radius: {Radii.MD}px;
+                border: 1px solid {Colors.WARNING};
+                padding: 8px;
+            }}
+        """)
+        layout = QVBoxLayout(container)
+        layout.setSpacing(8)
+
+        desc_label = QLabel(f"⚠️ {description}")
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {FontSizes.SM}px;")
+        layout.addWidget(desc_label)
+
+        btn_row = QHBoxLayout()
+        approve_btn = QPushButton("✓ Approve")
+        approve_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        approve_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.SUCCESS};
+                color: #000000;
+                border-radius: 12px;
+                padding: 6px 16px;
+                font-weight: bold;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ background-color: #2dd870; }}
+        """)
+
+        reject_btn = QPushButton("✕ Reject")
+        reject_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        reject_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {Colors.DANGER};
+                color: #ffffff;
+                border-radius: 12px;
+                padding: 6px 16px;
+                font-weight: bold;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ background-color: #ff8898; }}
+        """)
+
+        approve_btn.clicked.connect(lambda: self._on_action_confirmed(action_data, container))
+        reject_btn.clicked.connect(lambda: self._on_action_rejected(container))
+
+        btn_row.addWidget(approve_btn)
+        btn_row.addWidget(reject_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self.chat_layout.addWidget(container)
+        self._scroll_to_bottom()
+
+    def _on_action_confirmed(self, action_data: dict, container: QFrame) -> None:
+        """User clicked Approve on an action step."""
+        container.setEnabled(False)
+        container.setStyleSheet(container.styleSheet().replace(Colors.WARNING, Colors.SUCCESS))
+        self.action_confirmed.emit(action_data)
+
+    def _on_action_rejected(self, container: QFrame) -> None:
+        """User clicked Reject on an action step."""
+        container.setEnabled(False)
+        container.setStyleSheet(container.styleSheet().replace(Colors.WARNING, Colors.DANGER))
+        self.add_system_log("Action rejected by user.", color=Colors.DANGER)
+
     def clear(self):
         while self.chat_layout.count():
             item = self.chat_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self._step_widgets = {}
 
     def _on_submit(self):
         text = self.input_field.text().strip()
@@ -246,5 +351,104 @@ class ChatInterface(QWidget):
             self.scroll.verticalScrollBar().maximum()
         ))
 
+
+# ── Action Step Widget ─────────────────────────────────────────────────
+
+_STATUS_ICONS = {
+    "pending": "○",
+    "running": "◉",
+    "done": "✓",
+    "failed": "✗",
+    "blocked": "⊘",
+}
+
+_STATUS_COLORS = {
+    "pending": Colors.TEXT_SECONDARY,
+    "running": Colors.ACCENT,
+    "done": Colors.SUCCESS,
+    "failed": Colors.DANGER,
+    "blocked": Colors.DANGER,
+}
+
+_ACTION_TYPE_LABELS = {
+    "move_and_click": "🖱 Click",
+    "type_text": "⌨ Type",
+    "press_key": "⌨ Key",
+    "scroll_screen": "↕ Scroll",
+    "highlight_area": "🔍 Highlight",
+    "run_command": "⚡ Command",
+    "explain": "💡 Explain",
+    "suggest_fix": "🔧 Fix",
+}
+
+
+class ActionStepWidget(QFrame):
+    """A single step in a multi-step action plan."""
+
+    def __init__(self, step_num: int, total: int, action_type: str, description: str):
+        super().__init__()
+        self._status = "pending"
+        self.setObjectName("ActionStep")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
+
+        # Status icon
+        self.status_label = QLabel(_STATUS_ICONS["pending"])
+        self.status_label.setFixedWidth(20)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Step number
+        step_label = QLabel(f"{step_num}/{total}")
+        step_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {FontSizes.XS}px; font-family: {Fonts.MONO};")
+        step_label.setFixedWidth(30)
+
+        # Action type badge
+        badge_text = _ACTION_TYPE_LABELS.get(action_type, action_type)
+        badge = QLabel(badge_text)
+        badge.setStyleSheet(f"""
+            color: {Colors.ACCENT};
+            background-color: rgba(186, 158, 255, 0.12);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: {FontSizes.XS}px;
+            font-weight: bold;
+        """)
+        badge.setFixedHeight(22)
+
+        # Description
+        desc_label = QLabel(description)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; font-size: {FontSizes.SM}px;")
+
+        layout.addWidget(self.status_label)
+        layout.addWidget(step_label)
+        layout.addWidget(badge)
+        layout.addWidget(desc_label, stretch=1)
+
+        self._apply_style()
+
+    def set_status(self, status: str) -> None:
+        """Update the step's visual status."""
+        self._status = status
+        icon = _STATUS_ICONS.get(status, "?")
+        color = _STATUS_COLORS.get(status, Colors.TEXT_SECONDARY)
+        self.status_label.setText(icon)
+        self.status_label.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        border_color = _STATUS_COLORS.get(self._status, Colors.BORDER)
+        self.setStyleSheet(f"""
+            QFrame#ActionStep {{
+                background-color: {Colors.BG_SECONDARY};
+                border-radius: {Radii.SM}px;
+                border-left: 3px solid {border_color};
+            }}
+        """)
+
+
 # Ensure QTimer is available
 from PyQt6.QtCore import QTimer
+
