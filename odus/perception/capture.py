@@ -154,16 +154,21 @@ class ScreenCapture:
 
     def _capture_gnome(self) -> CaptureResult:
         """Capture via gnome-screenshot (GNOME Wayland)."""
-        import tempfile
+        import os
+        import uuid
 
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmp:
+        tmp_name = f"/tmp/odus-screenshot-{uuid.uuid4().hex}.png"
+        try:
             subprocess.run(
-                ["gnome-screenshot", "-f", tmp.name],
+                ["gnome-screenshot", "-f", tmp_name],
                 check=True,
                 timeout=10,
             )
-            tmp.seek(0)
-            png_bytes = tmp.read()
+            with open(tmp_name, "rb") as f:
+                png_bytes = f.read()
+        finally:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
 
         img = Image.open(io.BytesIO(png_bytes))
         return CaptureResult(
