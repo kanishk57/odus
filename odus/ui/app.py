@@ -74,14 +74,19 @@ class OdusApp(QObject):
         if self._terminal.isVisible():
             self._terminal.hide()
         else:
-            # Anchor next to the Mascot
-            m_pos = self._mascot_win.pos()
-            self._terminal.move(max(0, m_pos.x() - self._terminal.width() - 20), m_pos.y())
-            self._terminal.show()
+            self._show_terminal()
 
     def _show_terminal(self) -> None:
-        if not self._terminal.isVisible():
-            self._toggle_terminal()
+        """Ensure the terminal is visible, anchored next to the mascot, and on top."""
+        # Anchor next to the Mascot
+        m_pos = self._mascot_win.pos()
+        # Try to place to the left, but clamp to 0
+        target_x = max(0, m_pos.x() - self._terminal.width() - 20)
+        self._terminal.move(target_x, m_pos.y())
+        
+        self._terminal.show()
+        self._terminal.raise_()
+        self._terminal.activateWindow()
 
     async def _event_loop(self) -> None:
         """Listen for events on the bus."""
