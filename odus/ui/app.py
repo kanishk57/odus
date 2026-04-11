@@ -64,9 +64,8 @@ class OdusApp(QObject):
         self._mascot_win.show()
         
         # Welcome message
-        self._terminal.add_info("Welcome to Odus! 🦉")
-        self._terminal.add_info("Press Ctrl+Shift+O to capture your screen.")
-        self._terminal.add_divider()
+        self._terminal.add_ai_message("Welcome to Odus! 🦉")
+        self._terminal.add_system_log("Press Ctrl+Shift+O to capture your screen.")
         
         asyncio.create_task(self._event_loop())
 
@@ -186,7 +185,7 @@ class OdusApp(QObject):
                     })
                 )
             else:
-                self._terminal.add_info("Action cancelled by user.")
+                self._terminal.add_system_log("Action cancelled by user.")
                 self._mascot_win.set_state(MascotState.IDLE)
 
 
