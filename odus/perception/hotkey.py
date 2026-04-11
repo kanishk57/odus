@@ -110,10 +110,12 @@ class EvdevHotkeyListener:
                     
                     # Detect main key press
                     if key_event.scancode == self._main_keycode and key_event.keystate == key_event.key_down:
-                        if (ctrl_pressed == self._req_ctrl and 
-                            shift_pressed == self._req_shift and
-                            alt_pressed == self._req_alt and
-                            super_pressed == self._req_super):
+                        if (
+                            (not self._req_ctrl or ctrl_pressed) and 
+                            (not self._req_shift or shift_pressed) and
+                            (not self._req_alt or alt_pressed) and
+                            (not self._req_super or super_pressed)
+                        ):
                             if self._on_trigger_async:
                                 await self._on_trigger_async()
         except asyncio.CancelledError:
@@ -220,6 +222,10 @@ class HotkeyListener:
     def stop(self) -> None:
         """Stop the hotkey listener."""
         if self._listener:
+            self._listener.stop()
+            self._listener = None
+            logger.info("HotkeyListener stopped")
+     if self._listener:
             self._listener.stop()
             self._listener = None
             logger.info("HotkeyListener stopped")
