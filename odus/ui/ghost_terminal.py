@@ -63,26 +63,33 @@ class GhostTerminal(QWidget):
     def _apply_styles(self):
         self.setStyleSheet(f"""
             QWidget#GhostTerminal {{
-                background-color: {Colors.TERMINAL_BG};
-                border-radius: {Radii.MD}px;
-                border: 1px solid {Colors.BORDER};
+                background-color: rgba(15, 17, 23, 0.85);
+                border-radius: {Radii.LG}px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
             }}
             QWidget#TerminalHeader {{
-                border-bottom: 1px solid {Colors.BORDER};
+                background-color: rgba(255, 255, 255, 0.03);
+                border-top-left-radius: {Radii.LG}px;
+                border-top-right-radius: {Radii.LG}px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             }}
             QPushButton#ClearBtn {{
                 color: {Colors.TEXT_SECONDARY};
-                background: transparent;
-                border: none;
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: {Radii.SM}px;
+                padding: 4px 12px;
+                font-size: 11px;
             }}
             QPushButton#ClearBtn:hover {{
+                background: rgba(255, 255, 255, 0.1);
                 color: {Colors.TEXT_PRIMARY};
             }}
             QTextEdit#TerminalOutput {{
                 background-color: transparent;
                 color: {Colors.TERMINAL_TEXT};
                 border: none;
-                padding: 10px;
+                padding: 15px;
             }}
         """)
 
