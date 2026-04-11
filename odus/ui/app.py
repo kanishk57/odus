@@ -54,23 +54,17 @@ class OdusApp:
         # ── Window setup ────────────────────────────────────────────
         page.title = "Odus Mascot"
         
-        # Make the window frameless, transparent, and floating
+        # Make the window frameless and always on top
         page.window.frameless = True
         page.window.title_bar_hidden = True
         page.window.always_on_top = True
         
-        # Needs to be a transparent full screen or large enough area
-        # For simplicity, we make the window large enough to hold both,
-        # but the background is completely transparent.
-        page.window.width = Layout.WINDOW_MIN_WIDTH
-        page.window.height = Layout.WINDOW_MIN_HEIGHT
+        # Default to the small (collapsed) state to avoid the black box bug on Linux Wayland
+        page.window.width = Layout.MASCOT_WIDTH + 60
+        page.window.height = Layout.MASCOT_HEIGHT + 60
         page.bgcolor = ft.Colors.TRANSPARENT
         page.window.bgcolor = ft.Colors.TRANSPARENT
-        page.padding = Spacing.LG
-        
-        # Position it to bottom right roughly
-        # Flet doesn't have an exact bottom-right API, but usually the OS will place it.
-        # Can be done via page.window.left / page.window.top if needed.
+        page.padding = Spacing.MD
 
         page.theme_mode = ft.ThemeMode.DARK
         page.fonts = {
@@ -153,13 +147,18 @@ class OdusApp:
         """Toggle the visibility of the terminal modal."""
         self._is_expanded = not self._is_expanded
         if self._is_expanded:
+            # Expand physical window
+            self._page.window.width = Layout.WINDOW_MIN_WIDTH
+            self._page.window.height = Layout.WINDOW_MIN_HEIGHT
+            # Show interior modal
             self._terminal_container.visible = True
             self._terminal_container.opacity = 1
             self._terminal_container.scale = 1
         else:
+            # Hide interior modal
             self._terminal_container.opacity = 0
             self._terminal_container.scale = 0.9
-            # Hide it fully after animation completes
+            # Hide it fully and shrink window after animation completes
             self._page.run_task(self._hide_container_after_anim)
         self._page.update()
 
@@ -167,6 +166,8 @@ class OdusApp:
         await asyncio.sleep(0.3)
         if not self._is_expanded:
             self._terminal_container.visible = False
+            self._page.window.width = Layout.MASCOT_WIDTH + 60
+            self._page.window.height = Layout.MASCOT_HEIGHT + 60
             self._page.update()
 
     def _show_modal(self) -> None:
