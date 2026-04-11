@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from odus.events import EventType, OdusEvent, get_event_bus
 from odus.perception.capture import ScreenCapture
@@ -18,6 +19,9 @@ from odus.reasoning.tools import tool_run_command, tool_explain, tool_suggest_fi
 from odus.reasoning.vision import VisionAnalyzer, AnalysisResult
 
 logger = logging.getLogger(__name__)
+
+# Minimum seconds between captures (prevents runaway loops)
+_CAPTURE_COOLDOWN = 3.0
 
 
 class Agent:
@@ -40,12 +44,21 @@ class Agent:
         self._vision = VisionAnalyzer()
         self._capture = ScreenCapture()
         self._running = False
+        self._capturing = False          # Guard against concurrent captures
+        self._last_capture_time = 0.0    # Debounce rapid capture requests
 
         logger.info("Agent initialized")
 
     async def start(self) -> None:
         """Start the agentic loop. Runs until stop() is called."""
         self._running = True
+
+        # One-time setup (e.g., PipeWire ScreenCast consent dialog)
+        try:
+            await self._capture.initialize()
+        except Exception as e:
+            logger.warning("Capture initialization warning: %s", e)
+
         listener = self._bus.listen()
 
         logger.info("Agent loop started — waiting for events...")
@@ -66,7 +79,24 @@ class Agent:
         logger.info("Agent loop stopped")
 
     async def _handle_capture(self) -> None:
-        """Full capture → analyze → act pipeline."""
+        """Full capture → analyze → act pipeline with debounce + guard."""
+
+        # ── Guard: skip if already capturing ──
+        if self._capturing:
+            logger.debug("Capture already in progress — ignoring duplicate event")
+            return
+
+        # ── Debounce: enforce cooldown between captures ──
+        now = time.monotonic()
+        elapsed = now - self._last_capture_time
+        if elapsed < _CAPTURE_COOLDOWN:
+            remaining = _CAPTURE_COOLDOWN - elapsed
+            logger.debug("Capture cooldown: %.1fs remaining — skipping", remaining)
+            return
+
+        self._capturing = True
+        self._last_capture_time = time.monotonic()
+
         try:
             # 1. CAPTURE
             logger.info("📸 Capturing screen...")
@@ -95,6 +125,9 @@ class Agent:
             await self._bus.emit(
                 OdusEvent(EventType.ERROR, {"message": str(e)})
             )
+
+        finally:
+            self._capturing = False
 
     async def _process_analysis(self, analysis: AnalysisResult) -> None:
         """Route the analysis result to the appropriate action."""

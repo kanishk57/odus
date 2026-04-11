@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-import qasync
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt, QObject
@@ -69,16 +68,16 @@ class OdusApp(QObject):
         
         asyncio.create_task(self._event_loop())
 
-    @qasync.asyncSlot()
-    async def _on_mascot_clicked(self) -> None:
+    def _on_mascot_clicked(self) -> None:
         """User clicked the Mascot, force a screen capture!"""
-        await self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED))
+        asyncio.ensure_future(self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED)))
 
-    @qasync.asyncSlot()
-    async def _on_user_query(self, query: str) -> None:
+    def _on_user_query(self, query: str) -> None:
         """User typed something in the chat pill."""
         # For now, just pipe it to the bus
-        await self._bus.emit(OdusEvent(EventType.STATUS_UPDATE, {"message": f"User query: {query}"}))
+        asyncio.ensure_future(
+            self._bus.emit(OdusEvent(EventType.STATUS_UPDATE, {"message": f"User query: {query}"}))
+        )
 
 
     def _toggle_terminal(self) -> None:
@@ -151,42 +150,42 @@ class OdusApp(QObject):
             self._terminal.add_system_log(f"$ {command}", color=Colors.ACCENT)
             self._terminal.add_system_log("This command needs your approval.", color=Colors.WARNING)
 
-
-            # Display a standard PyQt MessageBox
-            msgBox = QMessageBox()
-            msgBox.setWindowTitle("Odus — Action Required")
-            msgBox.setText(f"Odus wants to run:\n\n{command}")
-            msgBox.setInformativeText(payload.get("explanation", ""))
+            # Use non-blocking dialog to avoid nested event loop crashes with qasync.
+            # msgBox.exec() starts a nested Qt loop that conflicts with asyncio.
+            self._active_msgbox = QMessageBox()
+            self._active_msgbox.setWindowTitle("Odus — Action Required")
+            self._active_msgbox.setText(f"Odus wants to run:\n\n{command}")
+            self._active_msgbox.setInformativeText(payload.get("explanation", ""))
             
             tier = payload.get("safety_tier", 2)
             if tier == 3:
-                msgBox.setIcon(QMessageBox.Icon.Critical)
+                self._active_msgbox.setIcon(QMessageBox.Icon.Critical)
             elif tier == 2:
-                msgBox.setIcon(QMessageBox.Icon.Warning)
+                self._active_msgbox.setIcon(QMessageBox.Icon.Warning)
             else:
-                msgBox.setIcon(QMessageBox.Icon.Information)
+                self._active_msgbox.setIcon(QMessageBox.Icon.Information)
 
-            msgBox.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
-            msgBox.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            self._active_msgbox.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+            self._active_msgbox.setDefaultButton(QMessageBox.StandardButton.Cancel)
 
-            # Block inside async thread?
-            # PyQt message boxes normally block the GUI thread.
-            # Using qasync, if it blocks, it might block the async loop.
-            # So we use .exec() but since we are running within qasync loop, it's safeish,
-            # or ideally we'd show it modelessly, but .exec() works in most cases.
-            ret = msgBox.exec()
+            def _on_confirm_finished(result):
+                if result == QMessageBox.StandardButton.Ok:
+                    asyncio.ensure_future(
+                        self._bus.emit(
+                            OdusEvent(EventType.USER_CONFIRMED, {
+                                "command": command,
+                                "explanation": payload.get("explanation", ""),
+                            })
+                        )
+                    )
+                else:
+                    self._terminal.add_system_log("Action cancelled by user.")
+                    self._mascot_win.set_state(MascotState.IDLE)
+                self._active_msgbox = None
 
-            if ret == QMessageBox.StandardButton.Ok:
-                # User confirmed
-                await self._bus.emit(
-                    OdusEvent(EventType.USER_CONFIRMED, {
-                        "command": command,
-                        "explanation": payload.get("explanation", ""),
-                    })
-                )
-            else:
-                self._terminal.add_system_log("Action cancelled by user.")
-                self._mascot_win.set_state(MascotState.IDLE)
+            self._active_msgbox.finished.connect(_on_confirm_finished)
+            self._active_msgbox.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+            self._active_msgbox.open()  # Non-blocking — no nested event loop
 
 
         elif event.type == EventType.EXECUTION_STARTED:

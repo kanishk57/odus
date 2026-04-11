@@ -1,13 +1,17 @@
 """
-Screen Capture Engine — Dual-backend (X11 + Wayland).
+Screen Capture Engine — Multi-backend (X11 + Wayland).
 
 DEV 1 owns this module.
 
 Strategy:
   1. Detect session type via $XDG_SESSION_TYPE
   2. X11/XWayland → use `mss` (fast, low-level)
-  3. Wayland → fallback to `grim` via subprocess (wlroots)
-     → or `gnome-screenshot` (GNOME Wayland)
+  3. Wayland → backend priority:
+     a. `grim` (wlroots compositors — Sway, Hyprland)
+     b. GNOME Mutter ScreenCast (GNOME Wayland — native, silent, no dialog)
+     c. `gnome-screenshot` (GNOME fallback)
+     d. `spectacle` (KDE Wayland)
+     e. `mss` (last resort, may fail)
 """
 
 from __future__ import annotations
@@ -18,7 +22,9 @@ import logging
 import os
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
+from urllib.parse import urlparse, unquote
 
 import mss
 import mss.tools
@@ -40,8 +46,13 @@ class ScreenCapture:
     """
     Captures the full screen or a region, with automatic backend selection.
 
+    On GNOME Wayland, uses PipeWire ScreenCast for silent, automatic
+    screenshots. The user sees a share dialog ONCE at startup to grant
+    screen access. After that, all captures are instant and silent.
+
     Usage:
         cap = ScreenCapture()
+        await cap.initialize()   # Call once — sets up PipeWire session
         result = await cap.grab_full_screen()
         compressed = cap.compress(result.png_bytes)
     """
@@ -49,6 +60,13 @@ class ScreenCapture:
     def __init__(self) -> None:
         self._session_type = os.environ.get("XDG_SESSION_TYPE", "x11").lower()
         self._backend = self._select_backend()
+        self._pw_node_id: int | None = None
+        self._pw_fd: int | None = None           # PipeWire remote fd
+        self._pw_session_handle: str | None = None
+        self._pw_bus = None
+        # Mutter ScreenCast state
+        self._mutter_helper_proc: subprocess.Popen | None = None
+        self._mutter_node_id: str | None = None
         logger.info(
             "ScreenCapture initialized | session=%s | backend=%s",
             self._session_type,
@@ -60,24 +78,42 @@ class ScreenCapture:
         if self._session_type != "wayland":
             return self._capture_x11
 
-        # Wayland: try grim first (wlroots), then gnome-screenshot
+        # Wayland: try grim first (wlroots compositors)
         if shutil.which("grim"):
             logger.info("Wayland detected — using grim backend")
             return self._capture_grim
-        elif shutil.which("gnome-screenshot"):
-            logger.info("Wayland detected — using gnome-screenshot backend")
-            return self._capture_gnome
-        elif shutil.which("spectacle"):
+
+        # GNOME Wayland: Use native Mutter ScreenCast (completely silent, no portal prompt)
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        if "gnome" in desktop:
+            # We use a system python3 helper because it usually has PyGObject
+            if shutil.which("python3"):
+                logger.info("Wayland detected — using native Mutter ScreenCast backend")
+                return self._capture_mutter
+            elif shutil.which("gnome-screenshot"):
+                logger.info("Wayland detected — using gnome-screenshot backend")
+                return self._capture_gnome_screenshot
+
+        # KDE Wayland
+        if shutil.which("spectacle"):
             logger.info("Wayland detected — using spectacle backend")
             return self._capture_spectacle
-        else:
-            logger.warning(
-                "Wayland detected but no compatible tool found. "
-                "Falling back to mss (may fail)."
-            )
-            return self._capture_x11
+
+        # Fallback: XDG portal (interactive — shows dialog each time)
+        logger.warning(
+            "Wayland detected but no preferred tool found. "
+            "Falling back to XDG portal (may show a dialog each time)."
+        )
+        return self._capture_portal_fallback
 
     # ── Public API ──────────────────────────────────────────────────────
+
+    async def initialize(self) -> None:
+        """
+        One-time setup.
+        """
+        if self._backend == self._capture_mutter:
+            await self._setup_mutter_session()
 
     async def grab_full_screen(self) -> CaptureResult:
         """Capture the entire primary screen. Returns PNG bytes."""
@@ -127,11 +163,624 @@ class ScreenCapture:
         )
         return compressed
 
-    # ── Backends (private) ──────────────────────────────────────────────
+    # ── GNOME Mutter ScreenCast (GNOME Wayland — native, silent) ─────
+
+    async def _setup_mutter_session(self) -> None:
+        """
+        Starts a persistent helper script that connects to the internal
+        org.gnome.Mutter.ScreenCast D-Bus API. This completely bypasses
+        the XDG Desktop Portal and requires ZERO user dialogs.
+        """
+        if self._mutter_helper_proc is not None:
+            return
+
+        logger.info("Setting up native Mutter ScreenCast session (silent)...")
+
+        helper_script = '''
+import gi, threading, time, sys
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+
+conn = Gio.bus_get_sync(Gio.BusType.SESSION)
+node_id = None
+lock = threading.Lock()
+
+def on_signal(c,s,p,i,sig,params):
+    global node_id
+    if sig == 'PipeWireStreamAdded':
+        with lock:
+            node_id = params.unpack()[0]
+            print(f"NODE_ID:{node_id}", flush=True)
+
+conn.signal_subscribe(
+    "org.gnome.Mutter.ScreenCast",
+    "org.gnome.Mutter.ScreenCast.Stream",
+    "PipeWireStreamAdded",
+    None, None, Gio.DBusSignalFlags.NONE, on_signal)
+
+ml = GLib.MainLoop()
+threading.Thread(target=ml.run, daemon=True).start()
+
+try:
+    r = conn.call_sync(
+        "org.gnome.Mutter.ScreenCast", "/org/gnome/Mutter/ScreenCast", "org.gnome.Mutter.ScreenCast",
+        "CreateSession", GLib.Variant("(a{sv})", ({},)), None, Gio.DBusCallFlags.NONE, 5000, None)
+    sp = r.unpack()[0]
+
+    r2 = conn.call_sync(
+        "org.gnome.Mutter.ScreenCast", sp, "org.gnome.Mutter.ScreenCast.Session",
+        "RecordMonitor", GLib.Variant("(sa{sv})", ("", {})), None, Gio.DBusCallFlags.NONE, 5000, None)
+    stream_path = r2.unpack()[0]
+
+    conn.call_sync(
+        "org.gnome.Mutter.ScreenCast", sp, "org.gnome.Mutter.ScreenCast.Session",
+        "Start", None, None, Gio.DBusCallFlags.NONE, 5000, None)
+    
+    # Stay alive forever to keep the session open
+    while True:
+        time.sleep(1)
+except Exception as e:
+    print(f"ERROR:{e}", flush=True)
+    sys.exit(1)
+'''
+
+        try:
+            self._mutter_helper_proc = subprocess.Popen(
+                ["/usr/bin/python3", "-c", helper_script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+            # Wait for the node ID
+            for line in iter(self._mutter_helper_proc.stdout.readline, ""):
+                line = line.strip()
+                if line.startswith("NODE_ID:"):
+                    self._mutter_node_id = line.split(":", 1)[1]
+                    logger.info("Mutter ScreenCast ready | PipeWire node=%s", self._mutter_node_id)
+                    return
+                elif line.startswith("ERROR:"):
+                    raise RuntimeError(f"Mutter helper failed: {line}")
+            
+            raise RuntimeError("Mutter helper exited without providing a node ID")
+
+        except Exception as e:
+            logger.error("Mutter setup failed (%s) — falling back to gnome-screenshot", e)
+            if self._mutter_helper_proc:
+                self._mutter_helper_proc.terminate()
+                self._mutter_helper_proc = None
+            self._backend = self._capture_gnome_screenshot
+            raise
+
+    async def _capture_mutter(self) -> CaptureResult:
+        """
+        Capture a frame from the Mutter ScreenCast PipeWire stream.
+        """
+        if not self._mutter_node_id:
+            raise RuntimeError("Mutter session not initialized. Call initialize() first.")
+
+        import glob
+        tmp_dir = f"/tmp/odus-mutter-{uuid.uuid4().hex}"
+        os.makedirs(tmp_dir, exist_ok=True)
+
+        try:
+            # Capture using GStreamer via pipewiresrc path=...
+            # The stream sends real frames immediately or very quickly.
+            gst_cmd = [
+                "gst-launch-1.0", "-e",
+                "pipewiresrc", f"path={self._mutter_node_id}", "!",
+                "videoconvert", "!", "pngenc", "!",
+                "multifilesink", f"location={tmp_dir}/frame_%05d.png",
+            ]
+
+            try:
+                await asyncio.to_thread(
+                    subprocess.run, gst_cmd,
+                    capture_output=True, timeout=1,
+                )
+            except subprocess.TimeoutExpired:
+                pass
+
+            frames = sorted(glob.glob(f"{tmp_dir}/frame_*.png"))
+            if not frames:
+                raise RuntimeError("Mutter capture produced no frames")
+
+            last_frame = frames[-1]
+            png_bytes = await asyncio.to_thread(self._read_file, last_frame)
+
+            if not png_bytes or len(png_bytes) < 100:
+                raise RuntimeError("Mutter capture produced empty frame")
+
+            img = Image.open(io.BytesIO(png_bytes))
+
+            logger.debug(
+                "Mutter capture: %dx%d, %d bytes (%d frames, used last)",
+                img.width, img.height, len(png_bytes), len(frames),
+            )
+
+            return CaptureResult(
+                png_bytes=png_bytes,
+                width=img.width,
+                height=img.height,
+            )
+
+        finally:
+            import shutil as _shutil
+            try:
+                _shutil.rmtree(tmp_dir)
+            except OSError:
+                pass
+
+    # ── GNOME Screenshot (GNOME Wayland — fallback) ─────────
+
+    async def _capture_gnome_screenshot(self) -> CaptureResult:
+        """
+        Capture the full screen using gnome-screenshot.
+
+        gnome-screenshot on modern GNOME (49+) saves to ~/Pictures/Screenshot.png
+        by default. We capture, read the file, and clean up.
+
+        This is completely silent — no dialogs, no user interaction.
+        """
+        import glob
+        import time as _time
+
+        # Record current screenshots so we can identify new ones
+        pictures_dir = os.path.expanduser("~/Pictures")
+        screenshots_before = set(glob.glob(f"{pictures_dir}/Screenshot*.png"))
+
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                ["gnome-screenshot"],
+                capture_output=True,
+                timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("gnome-screenshot timed out")
+
+        # Brief pause for file system sync
+        await asyncio.sleep(0.1)
+
+        # Find the new screenshot file
+        screenshots_after = set(glob.glob(f"{pictures_dir}/Screenshot*.png"))
+        new_files = screenshots_after - screenshots_before
+
+        if not new_files:
+            # Fallback: use the most recently modified Screenshot*.png
+            all_shots = glob.glob(f"{pictures_dir}/Screenshot*.png")
+            if all_shots:
+                latest = max(all_shots, key=os.path.getmtime)
+                # Only accept if modified in the last 5 seconds
+                if _time.time() - os.path.getmtime(latest) < 5:
+                    new_files = {latest}
+
+        if not new_files:
+            raise RuntimeError("gnome-screenshot did not produce a file")
+
+        screenshot_path = new_files.pop()
+        png_bytes = await asyncio.to_thread(self._read_file, screenshot_path)
+
+        # Clean up the screenshot file
+        try:
+            os.remove(screenshot_path)
+        except OSError:
+            pass
+
+        img = Image.open(io.BytesIO(png_bytes))
+
+        logger.debug(
+            "gnome-screenshot capture: %dx%d, %d bytes",
+            img.width, img.height, len(png_bytes),
+        )
+
+        return CaptureResult(
+            png_bytes=png_bytes,
+            width=img.width,
+            height=img.height,
+        )
+
+    # ── PipeWire ScreenCast (GNOME/KDE Wayland — silent capture) ─────
+
+    async def _setup_pipewire_session(self) -> None:
+        """
+        Negotiate a PipeWire ScreenCast session via the XDG portal.
+
+        Uses a helper subprocess with system Python3 + GDBus (PyGObject)
+        because dbus-fast doesn't support unix fd passing, which is
+        required by OpenPipeWireRemote.
+
+        The user sees a share dialog ONCE. After granting access,
+        all subsequent captures use GStreamer + PipeWire silently.
+        """
+        logger.info("Setting up PipeWire ScreenCast session (one-time consent)...")
+        logger.info("📋 A screen-sharing dialog will appear — please click 'Share'.")
+
+        try:
+            node_id, pw_fd = await asyncio.to_thread(self._setup_pipewire_sync)
+            self._pw_node_id = node_id
+            self._pw_fd = pw_fd
+            logger.info(
+                "PipeWire ScreenCast ready | node=%d | fd=%d — all future captures are automatic!",
+                node_id, pw_fd,
+            )
+        except Exception as e:
+            logger.error("PipeWire ScreenCast setup failed: %s — will fall back to portal screenshot", e)
+            self._pw_node_id = None
+            self._pw_fd = None
+            self._backend = self._capture_portal_fallback
+            raise
+
+    def _setup_pipewire_sync(self) -> tuple[int, int]:
+        """
+        Run the portal negotiation in a helper subprocess that uses
+        system Python3 with PyGObject/GDBus for unix fd passing.
+
+        Returns (node_id, pw_fd).
+        """
+        import socket
+        import json
+        import struct
+        import array
+
+        # Create a Unix socket pair to receive the fd from the helper
+        parent_sock, child_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+
+        # Helper script that does the portal negotiation with GDBus
+        helper_script = '''
+import gi, os, sys, json, socket, struct, array
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+
+def main():
+    conn = Gio.bus_get_sync(Gio.BusType.SESSION)
+
+    def call_portal(method, signature, args, fd_list=None):
+        return conn.call_with_unix_fd_list_sync(
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.ScreenCast",
+            method,
+            GLib.Variant(signature, args),
+            None,
+            Gio.DBusCallFlags.NONE,
+            60000,
+            fd_list,
+            None,
+        )
+
+    # 1. CreateSession
+    result, _ = call_portal("CreateSession", "(a{sv})", (
+        {"session_handle_token": GLib.Variant("s", "odus_session"),
+         "handle_token": GLib.Variant("s", "odus_handle")},
+    ))
+    request_path = result.unpack()[0]
+
+    # Wait for session to be created (synchronous with GDBus)
+    # The portal on GNOME auto-approves CreateSession, so we just need
+    # the session_handle from the response signal. Use a loop.
+    loop = GLib.MainLoop()
+    session_handle = [None]
+
+    def on_response(connection, sender, path, iface, signal, params):
+        code, results = params.unpack()
+        if code == 0:
+            session_handle[0] = results.get("session_handle", path.replace("/request/", "/session/"))
+        loop.quit()
+
+    conn.signal_subscribe(
+        "org.freedesktop.portal.Desktop",
+        "org.freedesktop.portal.Request",
+        "Response",
+        request_path,
+        None,
+        Gio.DBusSignalFlags.NONE,
+        on_response,
+    )
+    GLib.timeout_add(10000, loop.quit)
+    loop.run()
+
+    if not session_handle[0]:
+        print(json.dumps({"error": "CreateSession failed"}))
+        sys.exit(1)
+
+    sh = session_handle[0]
+
+    # 2. SelectSources
+    result2, _ = call_portal("SelectSources", "(oa{sv})", (
+        sh,
+        {"types": GLib.Variant("u", 1), "multiple": GLib.Variant("b", False)},
+    ))
+    rp2 = result2.unpack()[0]
+    loop2 = GLib.MainLoop()
+    ss_ok = [False]
+    def on_ss(c, s, p, i, sig, params):
+        code, _ = params.unpack()
+        ss_ok[0] = (code == 0)
+        loop2.quit()
+    conn.signal_subscribe("org.freedesktop.portal.Desktop",
+        "org.freedesktop.portal.Request", "Response", rp2,
+        None, Gio.DBusSignalFlags.NONE, on_ss)
+    GLib.timeout_add(30000, loop2.quit)
+    loop2.run()
+    if not ss_ok[0]:
+        print(json.dumps({"error": "SelectSources denied"}))
+        sys.exit(1)
+
+    # 3. Start
+    result3, _ = call_portal("Start", "(osa{sv})", (sh, "", {}))
+    rp3 = result3.unpack()[0]
+    loop3 = GLib.MainLoop()
+    start_result = [None]
+    def on_start(c, s, p, i, sig, params):
+        code, results = params.unpack()
+        if code == 0:
+            start_result[0] = results
+        loop3.quit()
+    conn.signal_subscribe("org.freedesktop.portal.Desktop",
+        "org.freedesktop.portal.Request", "Response", rp3,
+        None, Gio.DBusSignalFlags.NONE, on_start)
+    GLib.timeout_add(60000, loop3.quit)
+    loop3.run()
+    if not start_result[0]:
+        print(json.dumps({"error": "Start denied"}))
+        sys.exit(1)
+
+    streams = start_result[0]["streams"]
+    node_id = streams[0][0]
+
+    # 4. OpenPipeWireRemote — get the fd
+    result4, fd_list = call_portal("OpenPipeWireRemote", "(oa{sv})", (sh, {}))
+    if fd_list is None or fd_list.get_length() == 0:
+        print(json.dumps({"error": "OpenPipeWireRemote returned no fds"}))
+        sys.exit(1)
+
+    pw_fd = fd_list.get(0)
+
+    # Send node_id as JSON + the fd over the Unix socket
+    child_fd = int(sys.argv[1])
+    sock = socket.fromfd(child_fd, socket.AF_UNIX, socket.SOCK_STREAM)
+
+    msg = json.dumps({"node_id": node_id}).encode()
+    # Send the fd using SCM_RIGHTS
+    fds = array.array("i", [pw_fd])
+    sock.sendmsg([msg], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fds)])
+    sock.close()
+
+if __name__ == "__main__":
+    main()
+'''
+        try:
+            child_fd = child_sock.fileno()
+
+            proc = subprocess.run(
+                ["/usr/bin/python3", "-c", helper_script, str(child_fd)],
+                pass_fds=(child_fd,),
+                capture_output=True,
+                timeout=90,
+            )
+            child_sock.close()
+
+            if proc.returncode != 0:
+                stderr = proc.stderr.decode()[:300]
+                stdout = proc.stdout.decode()[:300]
+                raise RuntimeError(
+                    f"PipeWire helper failed (rc={proc.returncode}): {stderr or stdout}"
+                )
+
+            # Receive the node_id + fd from the helper
+            msg_bytes, ancdata, _, _ = parent_sock.recvmsg(4096, socket.CMSG_SPACE(4))
+
+            info = json.loads(msg_bytes.decode())
+            if "error" in info:
+                raise RuntimeError(f"PipeWire helper error: {info['error']}")
+
+            node_id = info["node_id"]
+
+            # Extract the fd from the ancillary data
+            pw_fd = None
+            for cmsg_level, cmsg_type, cmsg_data in ancdata:
+                if cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS:
+                    fds = array.array("i")
+                    fds.frombytes(cmsg_data[:fds.itemsize])
+                    pw_fd = fds[0]
+                    break
+
+            if pw_fd is None:
+                raise RuntimeError("Did not receive PipeWire fd from helper")
+
+            logger.info(
+                "PipeWire helper returned node=%d, fd=%d", node_id, pw_fd
+            )
+            return node_id, pw_fd
+
+        finally:
+            parent_sock.close()
+            try:
+                child_sock.close()
+            except OSError:
+                pass
+
+    async def _wait_portal_response(self, bus, request_path: str, timeout: int = 10):
+        """Wait for a portal Response signal on the given request path."""
+        from dbus_fast import Message
+
+        result_future = asyncio.get_event_loop().create_future()
+
+        class _Handler:
+            def __init__(self, fut, path):
+                self._fut = fut
+                self._path = path
+            def __call__(self, sig_msg):
+                if (sig_msg.interface == 'org.freedesktop.portal.Request'
+                        and sig_msg.member == 'Response'
+                        and sig_msg.path == self._path
+                        and not self._fut.done()):
+                    self._fut.set_result(sig_msg.body)
+
+        handler = _Handler(result_future, request_path)
+        bus.add_message_handler(handler)
+
+        await bus.call(Message(
+            destination='org.freedesktop.DBus',
+            path='/org/freedesktop/DBus',
+            interface='org.freedesktop.DBus',
+            member='AddMatch',
+            signature='s',
+            body=[
+                f"type='signal',interface='org.freedesktop.portal.Request',"
+                f"path='{request_path}',member='Response'"
+            ],
+        ))
+
+        try:
+            return await asyncio.wait_for(result_future, timeout=timeout)
+        finally:
+            bus.remove_message_handler(handler)
+
+    async def _capture_pipewire(self) -> CaptureResult:
+        """
+        Capture a frame from the PipeWire ScreenCast stream.
+
+        This is completely silent — no dialogs, no user interaction.
+        Uses GStreamer with the portal's PipeWire fd to capture from the
+        correct screen stream (not the webcam).
+
+        PipeWire's first frame is often black (stream not yet delivering
+        real content). We capture for ~1 second and use the LAST frame,
+        which is guaranteed to have real screen content.
+        """
+        if self._pw_node_id is None or self._pw_fd is None:
+            raise RuntimeError("PipeWire session not initialized. Call initialize() first.")
+
+        import glob
+
+        tmp_dir = f"/tmp/odus-pw-{uuid.uuid4().hex}"
+        os.makedirs(tmp_dir, exist_ok=True)
+
+        try:
+            # Capture frames for ~1 second using the portal's PipeWire fd.
+            # The fd= parameter ensures GStreamer connects to the portal's
+            # screen stream, NOT the default PipeWire (which has the webcam).
+            gst_cmd = [
+                "gst-launch-1.0", "-e",
+                "pipewiresrc", f"fd={self._pw_fd}", f"path={self._pw_node_id}", "!",
+                "videoconvert", "!",
+                "pngenc", "!",
+                "multifilesink", f"location={tmp_dir}/frame_%05d.png",
+            ]
+
+            try:
+                await asyncio.to_thread(
+                    subprocess.run, gst_cmd,
+                    capture_output=True, timeout=1,
+                    # pass_fds keeps the PipeWire fd open in the child process
+                    pass_fds=(self._pw_fd,),
+                )
+            except subprocess.TimeoutExpired:
+                pass  # Expected — pipewiresrc is continuous
+
+            # Find and use the last captured frame (real screen content)
+            frames = sorted(glob.glob(f"{tmp_dir}/frame_*.png"))
+            if not frames:
+                raise RuntimeError("PipeWire capture produced no frames")
+
+            last_frame = frames[-1]
+            png_bytes = await asyncio.to_thread(self._read_file, last_frame)
+
+            if not png_bytes or len(png_bytes) < 100:
+                raise RuntimeError("PipeWire capture produced an empty frame")
+
+            img = Image.open(io.BytesIO(png_bytes))
+
+            logger.debug(
+                "PipeWire capture: %dx%d, %d bytes (%d frames, used last)",
+                img.width, img.height, len(png_bytes), len(frames),
+            )
+
+            return CaptureResult(
+                png_bytes=png_bytes,
+                width=img.width,
+                height=img.height,
+            )
+
+        finally:
+            # Clean up all temp frame files
+            import shutil as _shutil
+            try:
+                _shutil.rmtree(tmp_dir)
+            except OSError:
+                pass
+
+    # ── Portal Screenshot Fallback ───────────────────────────────────
+
+    async def _capture_portal_fallback(self) -> CaptureResult:
+        """
+        Fallback: XDG Screenshot Portal (interactive — shows dialog each time).
+        Used only if PipeWire ScreenCast setup fails.
+        """
+        from dbus_fast.aio import MessageBus
+        from dbus_fast import Message, MessageType, Variant
+
+        bus = await MessageBus().connect()
+        try:
+            for interactive in (False, True):
+                mode = "interactive" if interactive else "non-interactive"
+                logger.info("Portal screenshot fallback | mode=%s", mode)
+
+                msg = Message(
+                    destination='org.freedesktop.portal.Desktop',
+                    path='/org/freedesktop/portal/desktop',
+                    interface='org.freedesktop.portal.Screenshot',
+                    member='Screenshot',
+                    signature='sa{sv}',
+                    body=['', {'interactive': Variant('b', interactive)}],
+                )
+
+                reply = await bus.call(msg)
+                if reply.message_type == MessageType.ERROR:
+                    continue
+
+                timeout = 5 if not interactive else 30
+                try:
+                    body = await self._wait_portal_response(bus, reply.body[0], timeout=timeout)
+                except asyncio.TimeoutError:
+                    continue
+
+                if body[0] != 0:
+                    continue
+
+                results = body[1] if len(body) > 1 else {}
+                if 'uri' not in results:
+                    continue
+
+                uri = results['uri']
+                if hasattr(uri, 'value'):
+                    uri = uri.value
+
+                filepath = unquote(urlparse(uri).path)
+                if not os.path.exists(filepath):
+                    continue
+
+                png_bytes = await asyncio.to_thread(self._read_file, filepath)
+                if not png_bytes:
+                    continue
+
+                img = Image.open(io.BytesIO(png_bytes))
+                return CaptureResult(
+                    png_bytes=png_bytes,
+                    width=img.width,
+                    height=img.height,
+                )
+
+            raise RuntimeError("Portal screenshot fallback failed")
+        finally:
+            bus.disconnect()
+
+    # ── Other Backends ───────────────────────────────────────────────
 
     async def _capture_x11(self) -> CaptureResult:
         """Capture via mss (X11 / XWayland)."""
-        # Note: mss is synchronous, but we run it in a thread to keep the loop free
         return await asyncio.to_thread(self._grab_mss)
 
     def _grab_mss(self) -> CaptureResult:
@@ -155,7 +804,7 @@ class ScreenCapture:
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"grim failed: {stderr.decode()}")
-            
+
         img = Image.open(io.BytesIO(stdout))
         return CaptureResult(
             png_bytes=stdout,
@@ -163,44 +812,8 @@ class ScreenCapture:
             height=img.height,
         )
 
-    async def _capture_gnome(self) -> CaptureResult:
-        """Capture via gnome-screenshot (GNOME Wayland)."""
-        import uuid
-
-        tmp_name = f"/tmp/odus-screenshot-{uuid.uuid4().hex}.png"
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "gnome-screenshot", "-f", tmp_name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(f"gnome-screenshot failed: {stderr.decode()}")
-
-            if not os.path.exists(tmp_name):
-                raise RuntimeError("gnome-screenshot did not produce a file")
-                
-            # Reading is IO-bound, run in thread
-            png_bytes = await asyncio.to_thread(self._read_file, tmp_name)
-        finally:
-            if os.path.exists(tmp_name):
-                os.remove(tmp_name)
-
-        if not png_bytes:
-            raise RuntimeError("gnome-screenshot produced an empty file")
-
-        img = Image.open(io.BytesIO(png_bytes))
-        return CaptureResult(
-            png_bytes=png_bytes,
-            width=img.width,
-            height=img.height,
-        )
-
     async def _capture_spectacle(self) -> CaptureResult:
         """Capture via spectacle (KDE Wayland)."""
-        import uuid
-
         tmp_name = f"/tmp/odus-screenshot-{uuid.uuid4().hex}.png"
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -214,7 +827,7 @@ class ScreenCapture:
 
             if not os.path.exists(tmp_name):
                 raise RuntimeError("spectacle did not produce a file")
-                
+
             png_bytes = await asyncio.to_thread(self._read_file, tmp_name)
         finally:
             if os.path.exists(tmp_name):
