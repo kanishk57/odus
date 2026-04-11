@@ -61,6 +61,12 @@ class HotkeyListener:
         self._on_trigger = on_trigger
         self._listener: keyboard.GlobalHotKeys | None = None
         self._bus = get_event_bus()
+        
+        # Capture the main asyncio loop so background pynput threads can emit safely
+        try:
+            self._main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._main_loop = asyncio.get_event_loop()
 
         logger.info("HotkeyListener configured | hotkey=%s", self._hotkey_str)
 
@@ -68,16 +74,11 @@ class HotkeyListener:
         """Called when the hotkey is pressed."""
         logger.info("🔥 Hotkey activated!")
 
-        # Emit event (fire-and-forget from sync context)
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(
-                self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED))
-            )
-        except RuntimeError:
-            # No running loop — we're in a background thread
-            # The callback approach handles this case
-            pass
+        # Push to the main asyncio loop safely from the pynput thread
+        if self._main_loop and self._main_loop.is_running():
+            async def _emit_event():
+                await self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED))
+            asyncio.run_coroutine_threadsafe(_emit_event(), self._main_loop)
 
         if self._on_trigger:
             self._on_trigger()
