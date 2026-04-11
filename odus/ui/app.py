@@ -47,17 +47,32 @@ class OdusApp:
         """Initialize and render the Flet app."""
         self._page = page
 
-        # ── Window setup ────────────────────────────────────────────
-        page.title = "Odus — AI Linux Mentor"
-        page.bgcolor = Colors.BG_PRIMARY
-        page.padding = 0
-        page.spacing = 0
-        page.window.width = Layout.WINDOW_DEFAULT_WIDTH
-        page.window.height = Layout.WINDOW_DEFAULT_HEIGHT
-        page.window.min_width = Layout.WINDOW_MIN_WIDTH
-        page.window.min_height = Layout.WINDOW_MIN_HEIGHT
-        page.theme_mode = ft.ThemeMode.DARK
+        # State
+        self._is_expanded = False
+        self._mascot.on_click = self._toggle_expanded
 
+        # ── Window setup ────────────────────────────────────────────
+        page.title = "Odus Mascot"
+        
+        # Make the window frameless, transparent, and floating
+        page.window.frameless = True
+        page.window.title_bar_hidden = True
+        page.window.always_on_top = True
+        
+        # Needs to be a transparent full screen or large enough area
+        # For simplicity, we make the window large enough to hold both,
+        # but the background is completely transparent.
+        page.window.width = Layout.WINDOW_MIN_WIDTH
+        page.window.height = Layout.WINDOW_MIN_HEIGHT
+        page.bgcolor = "#00000000"
+        page.window.bgcolor = "#00000000"
+        page.padding = Spacing.LG
+        
+        # Position it to bottom right roughly
+        # Flet doesn't have an exact bottom-right API, but usually the OS will place it.
+        # Can be done via page.window.left / page.window.top if needed.
+
+        page.theme_mode = ft.ThemeMode.DARK
         page.fonts = {
             "Inter": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
             "JetBrains Mono": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap",
@@ -65,105 +80,63 @@ class OdusApp:
 
         # ── Layout ──────────────────────────────────────────────────
 
-        # Sidebar: mascot + branding
-        sidebar = ft.Container(
+        # Terminal container (the modal)
+        self._terminal_container = ft.Container(
             content=ft.Column(
                 [
-                    # Branding header
-                    ft.Container(
-                        content=ft.Column(
-                            [
-                                ft.Text(
-                                    "Odus",
-                                    size=FontSizes.XXL,
-                                    color=Colors.ACCENT,
-                                    font_family=Fonts.HEADING,
-                                    weight=ft.FontWeight.BOLD,
-                                ),
-                                ft.Text(
-                                    "AI Linux Mentor",
-                                    size=FontSizes.SM,
-                                    color=Colors.TEXT_SECONDARY,
-                                    font_family=Fonts.BODY,
-                                ),
-                            ],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            spacing=2,
-                        ),
-                        padding=ft.padding.only(top=Spacing.XL, bottom=Spacing.MD),
+                    ft.Row(
+                        [
+                            ft.Text(
+                                "Analysis Output",
+                                size=FontSizes.LG,
+                                color=Colors.TEXT_PRIMARY,
+                                font_family=Fonts.HEADING,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.Container(expand=True),
+                            ft.IconButton(
+                                icon=ft.Icons.CLOSE,
+                                icon_color=Colors.TEXT_SECONDARY,
+                                on_click=self._toggle_expanded,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     ft.Divider(height=1, color=Colors.BORDER),
-                    # Mascot
-                    ft.Container(
-                        content=self._mascot,
-                        expand=True,
-                    ),
-                    ft.Divider(height=1, color=Colors.BORDER),
-                    # Hotkey hint
-                    ft.Container(
-                        content=ft.Text(
-                            "⌨ Ctrl+Shift+O to capture",
-                            size=FontSizes.XS,
-                            color=Colors.TEXT_SECONDARY,
-                            text_align=ft.TextAlign.CENTER,
-                            font_family=Fonts.MONO,
-                        ),
-                        padding=Spacing.MD,
-                    ),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=0,
-            ),
-            width=Layout.SIDEBAR_WIDTH,
-            bgcolor=Colors.BG_SECONDARY,
-            border=ft.border.only(right=ft.BorderSide(1, Colors.BORDER)),
-        )
-
-        # Main panel: ghost terminal
-        main_panel = ft.Container(
-            content=ft.Column(
-                [
-                    # Header
-                    ft.Container(
-                        content=ft.Row(
-                            [
-                                ft.Text(
-                                    "Analysis Output",
-                                    size=FontSizes.LG,
-                                    color=Colors.TEXT_PRIMARY,
-                                    font_family=Fonts.HEADING,
-                                    weight=ft.FontWeight.W_600,
-                                ),
-                                ft.Container(expand=True),
-                            ],
-                        ),
-                        padding=ft.padding.symmetric(
-                            horizontal=Spacing.LG,
-                            vertical=Spacing.MD,
-                        ),
-                    ),
-                    # Terminal
                     ft.Container(
                         content=self._terminal,
                         expand=True,
-                        padding=ft.padding.only(
-                            left=Spacing.LG,
-                            right=Spacing.LG,
-                            bottom=Spacing.LG,
-                        ),
                     ),
                 ],
-                spacing=0,
-                expand=True,
+                spacing=Spacing.SM,
             ),
-            expand=True,
+            width=Layout.MODAL_WIDTH,
+            height=Layout.MODAL_HEIGHT,
+            bgcolor=Colors.BG_PRIMARY,
+            border_radius=Radii.LG,
+            padding=Spacing.LG,
+            border=ft.border.all(1, Colors.BORDER),
+            shadow=ft.BoxShadow(
+                blur_radius=20,
+                spread_radius=2,
+                color="#80000000",
+            ),
+            visible=False,
+            scale=ft.Scale(scale=0.9),
+            animate_scale=ft.Animation(300, ft.AnimationCurve.EASE_OUT_BACK),
+            animate_opacity=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+            opacity=0,
         )
 
-        # Root layout
+        # Root layout: anchor everything to bottom right
         page.add(
             ft.Row(
-                [sidebar, main_panel],
-                spacing=0,
+                [
+                    self._terminal_container,
+                    ft.Container(content=self._mascot, alignment=ft.Alignment(1, 1)),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.END,
+                alignment=ft.MainAxisAlignment.END,
                 expand=True,
             )
         )
@@ -175,6 +148,31 @@ class OdusApp:
 
         # Start listening for events
         asyncio.create_task(self._event_loop())
+
+    def _toggle_expanded(self, e=None) -> None:
+        """Toggle the visibility of the terminal modal."""
+        self._is_expanded = not self._is_expanded
+        if self._is_expanded:
+            self._terminal_container.visible = True
+            self._terminal_container.opacity = 1
+            self._terminal_container.scale = 1
+        else:
+            self._terminal_container.opacity = 0
+            self._terminal_container.scale = 0.9
+            # Hide it fully after animation completes
+            self._page.run_task(self._hide_container_after_anim)
+        self._page.update()
+
+    async def _hide_container_after_anim(self):
+        await asyncio.sleep(0.3)
+        if not self._is_expanded:
+            self._terminal_container.visible = False
+            self._page.update()
+
+    def _show_modal(self) -> None:
+        """Force show the modal for important events."""
+        if not self._is_expanded:
+            self._toggle_expanded()
 
     async def _event_loop(self) -> None:
         """Listen for events on the bus and update the UI accordingly."""
@@ -205,6 +203,7 @@ class OdusApp:
 
         elif event.type == EventType.ANALYSIS_DONE:
             self._mascot.set_state(MascotState.SUCCESS)
+            self._show_modal()
             payload = event.payload
 
             self._terminal.add_divider()
@@ -219,6 +218,7 @@ class OdusApp:
 
         elif event.type == EventType.CONFIRM_REQUIRED:
             self._mascot.set_state(MascotState.WARNING)
+            self._show_modal()
             payload = event.payload
 
             self._terminal.add_divider()

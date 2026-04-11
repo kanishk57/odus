@@ -99,18 +99,20 @@ class Shadows:
     ELEVATED = "0 8px 24px rgba(0,0,0,0.5)"
 
 
-# ── Layout ─────────────────────────────────────────────────────────────
-
 class Layout:
-    """Layout constants for the landscape UI."""
+    """Layout constants for the floating mascot + modal UI."""
 
-    WINDOW_MIN_WIDTH = 900
-    WINDOW_MIN_HEIGHT = 520
-    WINDOW_DEFAULT_WIDTH = 1100
-    WINDOW_DEFAULT_HEIGHT = 620
+    # Normal small window (mascot only)
+    MASCOT_WIDTH = 120
+    MASCOT_HEIGHT = 160
 
-    SIDEBAR_WIDTH = 260            # Mascot + status panel
-    TERMINAL_MIN_HEIGHT = 200
+    # Expanded Modal (terminal)
+    MODAL_WIDTH = 800
+    MODAL_HEIGHT = 600
+
+    # Window sizes (when frameless and transparent, Flet window still needs enough space for the expanded modal)
+    WINDOW_MIN_WIDTH = MODAL_WIDTH + MASCOT_WIDTH
+    WINDOW_MIN_HEIGHT = MODAL_HEIGHT + MASCOT_HEIGHT
 
     # Safety tier badge colors
     TIER_COLORS = {

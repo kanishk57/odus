@@ -63,9 +63,10 @@ class MascotController(ft.Column):
         mascot.set_state(MascotState.THINKING)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_click=None) -> None:
         super().__init__()
         self._state = MascotState.IDLE
+        self.on_click = on_click
 
         # Mascot icon (large emoji placeholder — replace with Image later)
         self._icon = ft.Text(
@@ -92,16 +93,38 @@ class MascotController(ft.Column):
             visible=False,
         )
 
+        # Wrap in a Container for click and styling
+        self._mascot_container = ft.Container(
+            content=ft.Column(
+                [
+                    self._icon,
+                    self._progress,
+                    self._message,
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=Spacing.SM,
+            ),
+            bgcolor=Colors.BG_SECONDARY,
+            border_radius=Radii.LG,
+            padding=Spacing.MD,
+            border=ft.border.all(1, Colors.BORDER),
+            shadow=ft.BoxShadow(
+                blur_radius=15,
+                spread_radius=1,
+                color="#4D000000",
+            ),
+            on_click=self._on_click_handler,
+        )
+
         # Layout
         self.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         self.alignment = ft.MainAxisAlignment.CENTER
-        self.spacing = Spacing.MD
-        self.controls = [
-            ft.Container(height=Spacing.XL),
-            self._icon,
-            self._progress,
-            self._message,
-        ]
+        self.controls = [self._mascot_container]
+
+    def _on_click_handler(self, e):
+        if self.on_click:
+            self.on_click(e)
 
     @property
     def state(self) -> MascotState:
