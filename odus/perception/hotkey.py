@@ -225,7 +225,3 @@ class HotkeyListener:
             self._listener.stop()
             self._listener = None
             logger.info("HotkeyListener stopped")
-     if self._listener:
-            self._listener.stop()
-            self._listener = None
-            logger.info("HotkeyListener stopped")
