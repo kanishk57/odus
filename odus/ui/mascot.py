@@ -6,7 +6,8 @@ import logging
 from enum import Enum
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QMenu
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer
-from PyQt6.QtGui import QColor, QAction
+from PyQt6.QtGui import QColor, QAction, QPixmap
+import os
 
 from odus.ui.theme import Colors, FontSizes, Radii
 
@@ -21,12 +22,14 @@ class MascotState(Enum):
     WARNING = "warning"
 
 
+ASSET_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "assets")
+
 MASCOT_DISPLAY = {
-    MascotState.IDLE: "🦉",
-    MascotState.THINKING: "🔍",
-    MascotState.SUCCESS: "✅",
-    MascotState.ERROR: "❌",
-    MascotState.WARNING: "⚠️",
+    MascotState.IDLE: os.path.join(ASSET_DIR, "mascot_idle.png"),
+    MascotState.THINKING: os.path.join(ASSET_DIR, "mascot_thinking.png"),
+    MascotState.SUCCESS: os.path.join(ASSET_DIR, "mascot_success.png"),
+    MascotState.ERROR: os.path.join(ASSET_DIR, "mascot_error.png"),
+    MascotState.WARNING: os.path.join(ASSET_DIR, "mascot_warning.png"),
 }
 
 MASCOT_COLORS = {
@@ -98,10 +101,10 @@ class MascotWindow(QWidget):
         container_layout.setContentsMargins(0, 0, 0, 0) # No internal padding
         container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Mascot Emoji
-        self.icon_label = QLabel(MASCOT_DISPLAY[self._state])
+        # Mascot Icon
+        self.icon_label = QLabel()
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setStyleSheet(f"font-size: 64px; background: transparent; line-height: 100px;")
+        self.icon_label.setStyleSheet("background: transparent;")
         
         container_layout.addWidget(self.icon_label)
         shadow_layout.addWidget(self.container)
@@ -113,7 +116,11 @@ class MascotWindow(QWidget):
     def set_state(self, state: MascotState) -> None:
         """Update mascot appearance and trigger animations."""
         self._state = state
-        self.icon_label.setText(MASCOT_DISPLAY[state])
+        
+        pixmap = QPixmap(MASCOT_DISPLAY[state])
+        self.icon_label.setPixmap(pixmap.scaled(
+            80, 80, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        ))
         
         # Reset animation
         self.pulse_anim.stop()

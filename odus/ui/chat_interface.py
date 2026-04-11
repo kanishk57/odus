@@ -79,6 +79,54 @@ class ChatInterface(QWidget):
         title.setFont(QFont(Fonts.HEADING, FontSizes.MD))
         header.addWidget(title)
         header.addStretch()
+
+        # Window Controls
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        self.min_btn = QPushButton("—")
+        self.max_btn = QPushButton("□")
+        self.close_btn = QPushButton("✕")
+
+        for btn in (self.min_btn, self.max_btn, self.close_btn):
+            btn.setFixedSize(28, 28)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {Colors.TEXT_SECONDARY};
+                    border: none;
+                    font-weight: bold;
+                    font-size: 14px;
+                    border-radius: 14px;
+                }}
+                QPushButton:hover {{
+                    color: {Colors.TEXT_PRIMARY};
+                    background-color: {Colors.BG_ELEVATED};
+                }}
+            """)
+            btn_layout.addWidget(btn)
+
+        self.close_btn.setStyleSheet(self.close_btn.styleSheet() + f"""
+            QPushButton:hover {{
+                color: white;
+                background-color: {Colors.DANGER};
+            }}
+        """)
+
+        self.min_btn.clicked.connect(self.window().showMinimized)
+        
+        def toggle_maximize():
+            if self.window().isMaximized():
+                self.window().showNormal()
+            else:
+                self.window().showMaximized()
+                
+        self.max_btn.clicked.connect(toggle_maximize)
+        self.close_btn.clicked.connect(self.window().hide)
+
+        header.addLayout(btn_layout)
+
         self.layout.addLayout(header)
 
         # 2. Chat Area (Scrollable)
