@@ -111,8 +111,8 @@ class Layout:
     MODAL_HEIGHT = 600
 
     # Window sizes (when frameless and transparent, Flet window still needs enough space for the expanded modal)
-    WINDOW_MIN_WIDTH = MODAL_WIDTH + MASCOT_WIDTH
-    WINDOW_MIN_HEIGHT = MODAL_HEIGHT + MASCOT_HEIGHT
+    WINDOW_MIN_WIDTH = MODAL_WIDTH + MASCOT_WIDTH + 100
+    WINDOW_MIN_HEIGHT = MODAL_HEIGHT + MASCOT_HEIGHT + 100
 
     # Safety tier badge colors
     TIER_COLORS = {

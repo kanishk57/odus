@@ -64,8 +64,8 @@ class OdusApp:
         # but the background is completely transparent.
         page.window.width = Layout.WINDOW_MIN_WIDTH
         page.window.height = Layout.WINDOW_MIN_HEIGHT
-        page.bgcolor = "#00000000"
-        page.window.bgcolor = "#00000000"
+        page.bgcolor = ft.Colors.TRANSPARENT
+        page.window.bgcolor = ft.Colors.TRANSPARENT
         page.padding = Spacing.LG
         
         # Position it to bottom right roughly
