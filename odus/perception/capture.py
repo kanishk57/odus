@@ -67,6 +67,9 @@ class ScreenCapture:
         elif shutil.which("gnome-screenshot"):
             logger.info("Wayland detected — using gnome-screenshot backend")
             return self._capture_gnome
+        elif shutil.which("spectacle"):
+            logger.info("Wayland detected — using spectacle backend")
+            return self._capture_spectacle
         else:
             logger.warning(
                 "Wayland detected but no compatible tool found. "
@@ -186,6 +189,39 @@ class ScreenCapture:
 
         if not png_bytes:
             raise RuntimeError("gnome-screenshot produced an empty file")
+
+        img = Image.open(io.BytesIO(png_bytes))
+        return CaptureResult(
+            png_bytes=png_bytes,
+            width=img.width,
+            height=img.height,
+        )
+
+    async def _capture_spectacle(self) -> CaptureResult:
+        """Capture via spectacle (KDE Wayland)."""
+        import uuid
+
+        tmp_name = f"/tmp/odus-screenshot-{uuid.uuid4().hex}.png"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "spectacle", "-b", "-n", "-o", tmp_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(f"spectacle failed: {stderr.decode()}")
+
+            if not os.path.exists(tmp_name):
+                raise RuntimeError("spectacle did not produce a file")
+                
+            png_bytes = await asyncio.to_thread(self._read_file, tmp_name)
+        finally:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
+
+        if not png_bytes:
+            raise RuntimeError("spectacle produced an empty file")
 
         img = Image.open(io.BytesIO(png_bytes))
         return CaptureResult(

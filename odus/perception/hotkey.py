@@ -40,6 +40,71 @@ def _parse_hotkey(hotkey_str: str) -> str:
     return "+".join(formatted)
 
 
+class EvdevHotkeyListener:
+    """Fallback hotkey listener using evdev (works on Wayland)."""
+
+    def __init__(self, on_trigger: Callable[[], None] | None):
+        self._on_trigger = on_trigger
+        self._device = self._find_keyboard()
+        self._task = None
+
+    def _find_keyboard(self):
+        try:
+            import evdev
+            for path in evdev.list_devices():
+                dev = evdev.InputDevice(path)
+                caps = dev.capabilities(verbose=True)
+                if ('EV_KEY', 1) in caps:
+                    return dev
+            raise RuntimeError("No keyboard found")
+        except ImportError:
+            raise RuntimeError("evdev is not installed")
+        except PermissionError:
+            raise RuntimeError("Permission denied to access /dev/input. Please run: sudo usermod -aG input $USER")
+
+    async def listen(self):
+        import evdev
+        from evdev import ecodes
+        
+        ctrl_pressed = False
+        shift_pressed = False
+        
+        try:
+            async for event in self._device.async_read_loop():
+                if event.type == ecodes.EV_KEY:
+                    key_event = evdev.categorize(event)
+                    
+                    # Track modifier states
+                    if key_event.scancode in [ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL]:
+                        ctrl_pressed = (key_event.keystate != key_event.key_up)
+                    if key_event.scancode in [ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT]:
+                        shift_pressed = (key_event.keystate != key_event.key_up)
+                    
+                    # Detect 'O' key press
+                    if key_event.scancode == ecodes.KEY_O and key_event.keystate == key_event.key_down:
+                        if ctrl_pressed and shift_pressed:
+                            if self._on_trigger:
+                                self._on_trigger()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Evdev loop error: %s", e)
+
+    def start(self):
+        try:
+            loop = asyncio.get_running_loop()
+            self._task = loop.create_task(self.listen())
+            logger.info("EvdevHotkeyListener started")
+        except RuntimeError:
+            logger.error("EvdevHotkeyListener requires a running event loop")
+
+    def stop(self):
+        if self._task:
+            self._task.cancel()
+            self._task = None
+            logger.info("EvdevHotkeyListener stopped")
+
+
 class HotkeyListener:
     """
     Listens for a global hotkey and emits CAPTURE_STARTED on the event bus.
@@ -59,7 +124,7 @@ class HotkeyListener:
             self._hotkey_str = DEFAULT_HOTKEY
 
         self._on_trigger = on_trigger
-        self._listener: keyboard.GlobalHotKeys | None = None
+        self._listener = None
         self._bus = get_event_bus()
         
         # Capture the main asyncio loop so background pynput threads can emit safely
@@ -68,13 +133,14 @@ class HotkeyListener:
         except RuntimeError:
             self._main_loop = asyncio.get_event_loop()
 
-        logger.info("HotkeyListener configured | hotkey=%s", self._hotkey_str)
+        self._session_type = os.environ.get("XDG_SESSION_TYPE", "x11").lower()
+        logger.info("HotkeyListener configured | session=%s | hotkey=%s", self._session_type, self._hotkey_str)
 
     def _on_activate(self) -> None:
         """Called when the hotkey is pressed."""
         logger.info("🔥 Hotkey activated!")
 
-        # Push to the main asyncio loop safely from the pynput thread
+        # Push to the main asyncio loop safely from the thread
         if self._main_loop and self._main_loop.is_running():
             async def _emit_event():
                 await self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED))
@@ -84,13 +150,22 @@ class HotkeyListener:
             self._on_trigger()
 
     def start(self) -> None:
-        """Start listening for the hotkey (non-blocking background thread)."""
+        """Start listening for the hotkey."""
+        if self._session_type == "wayland":
+            logger.info("Wayland detected — attempting to use EvdevHotkeyListener")
+            try:
+                self._listener = EvdevHotkeyListener(on_trigger=self._on_activate)
+                self._listener.start()
+                return
+            except Exception as e:
+                logger.warning("EvdevHotkeyListener failed to start: %s. Falling back to pynput.", e)
+
         self._listener = keyboard.GlobalHotKeys(
             {self._hotkey_str: self._on_activate}
         )
         self._listener.daemon = True
         self._listener.start()
-        logger.info("HotkeyListener started — press %s to capture", self._hotkey_str)
+        logger.info("HotkeyListener (pynput) started — press %s to capture", self._hotkey_str)
 
     def stop(self) -> None:
         """Stop the hotkey listener."""
