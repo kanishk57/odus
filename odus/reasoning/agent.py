@@ -70,7 +70,7 @@ class Agent:
         try:
             # 1. CAPTURE
             logger.info("📸 Capturing screen...")
-            result = self._capture.grab_full_screen()
+            result = await self._capture.grab_full_screen()
             compressed = self._capture.compress(result.png_bytes)
 
             await self._bus.emit(

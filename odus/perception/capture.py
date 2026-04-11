@@ -12,6 +12,7 @@ Strategy:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -41,7 +42,7 @@ class ScreenCapture:
 
     Usage:
         cap = ScreenCapture()
-        result = cap.grab_full_screen()
+        result = await cap.grab_full_screen()
         compressed = cap.compress(result.png_bytes)
     """
 
@@ -75,13 +76,13 @@ class ScreenCapture:
 
     # ── Public API ──────────────────────────────────────────────────────
 
-    def grab_full_screen(self) -> CaptureResult:
+    async def grab_full_screen(self) -> CaptureResult:
         """Capture the entire primary screen. Returns PNG bytes."""
-        return self._backend()
+        return await self._backend()
 
-    def grab_region(self, x: int, y: int, w: int, h: int) -> CaptureResult:
+    async def grab_region(self, x: int, y: int, w: int, h: int) -> CaptureResult:
         """Capture a specific region. Falls back to full + crop."""
-        full = self._backend()
+        full = await self._backend()
         img = Image.open(io.BytesIO(full.png_bytes))
         cropped = img.crop((x, y, x + w, y + h))
         buf = io.BytesIO()
@@ -125,10 +126,14 @@ class ScreenCapture:
 
     # ── Backends (private) ──────────────────────────────────────────────
 
-    def _capture_x11(self) -> CaptureResult:
+    async def _capture_x11(self) -> CaptureResult:
         """Capture via mss (X11 / XWayland)."""
+        # Note: mss is synchronous, but we run it in a thread to keep the loop free
+        return await asyncio.to_thread(self._grab_mss)
+
+    def _grab_mss(self) -> CaptureResult:
         with mss.mss() as sct:
-            monitor = sct.monitors[0]  # Entire virtual screen
+            monitor = sct.monitors[0]
             shot = sct.grab(monitor)
             png_bytes = mss.tools.to_png(shot.rgb, shot.size)
             return CaptureResult(
@@ -137,35 +142,44 @@ class ScreenCapture:
                 height=shot.height,
             )
 
-    def _capture_grim(self) -> CaptureResult:
+    async def _capture_grim(self) -> CaptureResult:
         """Capture via grim (Wayland / wlroots compositors)."""
-        result = subprocess.run(
-            ["grim", "-t", "png", "-"],
-            capture_output=True,
-            check=True,
-            timeout=10,
+        proc = await asyncio.create_subprocess_exec(
+            "grim", "-t", "png", "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        img = Image.open(io.BytesIO(result.stdout))
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"grim failed: {stderr.decode()}")
+            
+        img = Image.open(io.BytesIO(stdout))
         return CaptureResult(
-            png_bytes=result.stdout,
+            png_bytes=stdout,
             width=img.width,
             height=img.height,
         )
 
-    def _capture_gnome(self) -> CaptureResult:
+    async def _capture_gnome(self) -> CaptureResult:
         """Capture via gnome-screenshot (GNOME Wayland)."""
-        import os
         import uuid
 
         tmp_name = f"/tmp/odus-screenshot-{uuid.uuid4().hex}.png"
         try:
-            subprocess.run(
-                ["gnome-screenshot", "-f", tmp_name],
-                check=True,
-                timeout=10,
+            proc = await asyncio.create_subprocess_exec(
+                "gnome-screenshot", "-f", tmp_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            with open(tmp_name, "rb") as f:
-                png_bytes = f.read()
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(f"gnome-screenshot failed: {stderr.decode()}")
+
+            if not os.path.exists(tmp_name):
+                raise RuntimeError("gnome-screenshot did not produce a file")
+                
+            # Reading is IO-bound, run in thread
+            png_bytes = await asyncio.to_thread(self._read_file, tmp_name)
         finally:
             if os.path.exists(tmp_name):
                 os.remove(tmp_name)
@@ -179,3 +193,8 @@ class ScreenCapture:
             width=img.width,
             height=img.height,
         )
+
+    @staticmethod
+    def _read_file(path: str) -> bytes:
+        with open(path, "rb") as f:
+            return f.read()
