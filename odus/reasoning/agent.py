@@ -18,6 +18,8 @@ from odus.events import EventType, OdusEvent, get_event_bus
 from odus.perception.capture import ScreenCapture
 from odus.reasoning.tools import (
     tool_run_command,
+    tool_list_directory,
+    tool_read_file,
     tool_explain,
     tool_suggest_fix,
     tool_move_and_click,
@@ -25,6 +27,7 @@ from odus.reasoning.tools import (
     tool_press_key,
     tool_scroll_screen,
     tool_highlight_area,
+    get_browser,
 )
 from odus.reasoning.vision import VisionAnalyzer, AnalysisResult
 
@@ -39,9 +42,10 @@ _INPUT_TOOLS = frozenset({
     "scroll_screen", "highlight_area",
 })
 
-# CLI tool names
+# CLI & File tool names
 _CLI_TOOLS = frozenset({
     "run_command", "explain", "suggest_fix",
+    "list_directory", "read_file",
 })
 
 
@@ -70,6 +74,7 @@ class Agent:
         self._running = False
         self._capturing = False          # Guard against concurrent captures
         self._last_capture_time = 0.0    # Debounce rapid capture requests
+        self._paused_context: dict | None = None  # Stores context while waiting for user
 
         logger.info("Agent initialized")
 
@@ -100,6 +105,12 @@ class Agent:
 
             elif event.type == EventType.INPUT_ACTION_CONFIRMED:
                 await self._handle_input_action_confirmed(event.payload)
+
+            elif event.type == EventType.PERMISSION_GRANTED:
+                await self._handle_permission_granted(event.payload)
+
+            elif event.type == EventType.PERMISSION_DENIED:
+                self._paused_context = None
 
     async def stop(self) -> None:
         """Stop the agentic loop."""
@@ -273,6 +284,11 @@ class Agent:
 
                 # If the step needs user confirmation, stop here and wait
                 if result and result.get("status") == "needs_confirmation":
+                    self._paused_context = {
+                        "analysis": analysis,
+                        "step_index": i,  # 1-based current step
+                        "plan": plan,
+                    }
                     await self._bus.emit(
                         OdusEvent(EventType.INPUT_ACTION_PLANNED, {
                             "step": i,
@@ -281,7 +297,24 @@ class Agent:
                             "remaining_plan": plan[i:],
                         })
                     )
-                    # The plan will resume when INPUT_ACTION_CONFIRMED is received
+                    return
+
+                # If the step needs permission (directory/file), stop and wait
+                if result and result.get("status") == "needs_permission":
+                    self._paused_context = {
+                        "analysis": analysis,
+                        "step_index": i,
+                        "plan": plan,
+                    }
+                    await self._bus.emit(
+                        OdusEvent(EventType.PERMISSION_REQUESTED, {
+                            "step": i,
+                            "total_steps": total_steps,
+                            "resource_type": result.get("resource_type"),
+                            "path": result.get("path"),
+                            "description": result.get("description"),
+                        })
+                    )
                     return
 
                 if result and result.get("status") == "blocked":
@@ -339,9 +372,21 @@ class Agent:
         """Route a single plan step to the correct tool."""
 
         if action_type == "run_command":
-            return tool_run_command(
+            return await tool_run_command(
                 command=params.get("command", ""),
                 safety_tier=safety_tier,
+                explanation=description,
+            )
+
+        elif action_type == "list_directory":
+            return await tool_list_directory(
+                path=params.get("path", "."),
+                explanation=description,
+            )
+
+        elif action_type == "read_file":
+            return await tool_read_file(
+                path=params.get("path", ""),
                 explanation=description,
             )
 
@@ -421,7 +466,7 @@ class Agent:
 
         await self._bus.emit(OdusEvent(EventType.EXECUTION_STARTED))
 
-        result = tool_run_command(command, 2, explanation)
+        result = await tool_run_command(command, 2, explanation)
 
         await self._bus.emit(
             OdusEvent(EventType.EXECUTION_DONE, {
@@ -519,3 +564,44 @@ class Agent:
             "error": result.error,
             "duration_ms": result.duration_ms,
         }
+
+    async def _handle_permission_granted(self, payload: dict) -> None:
+        """Handle directory/file permission being granted by the user."""
+        path = payload.get("path", "")
+        if not path:
+            return
+
+        logger.info("User granted permission for: %s", path)
+        get_browser().grant_access(path)
+
+        # Resume plan if we have one paused
+        if self._paused_context:
+            ctx = self._paused_context
+            self._paused_context = None
+            
+            # Resume from the next step (or re-execute the current one now that we have permission)
+            # Re-executing current step is safer since it was the one that failed
+            logger.info("Resuming plan from step %d", ctx["step_index"])
+            
+            # Extract the remaining plan starting from the paused step
+            plan = ctx["plan"]
+            start_idx = ctx["step_index"] - 1 # 0-based
+            remaining_plan = plan[start_idx:]
+            
+            # Reuse _process_plan but with the partial plan
+            # We construct a dummy AnalysisResult to keep the logic clean
+            class MockAnalysis:
+                def __init__(self, summary, explanation, plan, confidence):
+                    self.summary = summary
+                    self.explanation_for_user = explanation
+                    self.plan = plan
+                    self.confidence = confidence
+
+            mock_analysis = MockAnalysis(
+                ctx["analysis"].summary,
+                ctx["analysis"].explanation_for_user,
+                remaining_plan,
+                ctx["analysis"].confidence
+            )
+            
+            await self._process_plan(mock_analysis)

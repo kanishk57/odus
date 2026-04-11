@@ -105,7 +105,8 @@ class InputSimulator:
             try:
                 import pyautogui  # noqa: F401
                 return _Backend.PYAUTOGUI
-            except ImportError:
+            except (ImportError, SystemExit, Exception) as e:
+                logger.warning("pyautogui not available as mouse backend: %s", e)
                 pass
             if shutil.which("xdotool"):
                 return _Backend.XDOTOOL
@@ -122,7 +123,8 @@ class InputSimulator:
                 import pyautogui  # noqa: F401
                 logger.warning("Wayland: using pyautogui (may not work on all compositors)")
                 return _Backend.PYAUTOGUI
-            except ImportError:
+            except (ImportError, SystemExit, Exception) as e:
+                logger.warning("pyautogui not available as mouse backend on Wayland: %s", e)
                 pass
 
         logger.error("No mouse simulation backend available!")
@@ -134,7 +136,8 @@ class InputSimulator:
             try:
                 import pyautogui  # noqa: F401
                 return _Backend.PYAUTOGUI
-            except ImportError:
+            except (ImportError, SystemExit, Exception) as e:
+                logger.warning("pyautogui not available as mouse backend: %s", e)
                 pass
             if shutil.which("xdotool"):
                 return _Backend.XDOTOOL
@@ -146,7 +149,8 @@ class InputSimulator:
             try:
                 import pyautogui  # noqa: F401
                 return _Backend.PYAUTOGUI
-            except ImportError:
+            except (ImportError, SystemExit, Exception) as e:
+                logger.warning("pyautogui not available as keyboard backend on Wayland: %s", e)
                 pass
 
         logger.error("No keyboard simulation backend available!")
@@ -155,10 +159,14 @@ class InputSimulator:
     def _get_pyautogui(self):
         """Lazy import pyautogui to avoid import errors when not needed."""
         if self._pyautogui is None:
-            import pyautogui
-            pyautogui.FAILSAFE = True   # Move mouse to corner to abort
-            pyautogui.PAUSE = 0.05      # Tiny pause between actions
-            self._pyautogui = pyautogui
+            try:
+                import pyautogui
+                pyautogui.FAILSAFE = True   # Move mouse to corner to abort
+                pyautogui.PAUSE = 0.05      # Tiny pause between actions
+                self._pyautogui = pyautogui
+            except (ImportError, SystemExit, Exception) as e:
+                logger.error("Failed to load pyautogui in _get_pyautogui: %s", e)
+                raise RuntimeError(f"pyautogui backend failed to initialize: {e}")
         return self._pyautogui
 
     # ── Mouse Actions ──────────────────────────────────────────────────

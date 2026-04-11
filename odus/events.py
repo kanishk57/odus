@@ -48,6 +48,20 @@ class EventType(Enum):
     AGENT_STEP_DONE = "agent_step_done"                 # Step completed successfully
     AGENT_PLAN_DONE = "agent_plan_done"                 # All plan steps finished
 
+    # Permission events (file/repo access)
+    PERMISSION_REQUESTED = "permission_requested"       # Agent requests access to a resource
+    PERMISSION_GRANTED = "permission_granted"           # User clicked "Allow"
+    PERMISSION_DENIED = "permission_denied"             # User clicked "Deny"
+
+    # Terminal streaming events (PTY)
+    TERMINAL_OUTPUT_LINE = "terminal_output_line"       # PTY streamed a line of output
+    TERMINAL_COMMAND_STARTED = "terminal_command_started"  # PTY command began
+    TERMINAL_COMMAND_DONE = "terminal_command_done"     # PTY command finished
+    TERMINAL_CWD_CHANGED = "terminal_cwd_changed"       # Working directory changed
+
+    # UI events
+    TAB_SWITCH = "tab_switch"                           # Switch between chat/terminal tabs
+
     # System events
     ERROR = "error"
     STATUS_UPDATE = "status_update"

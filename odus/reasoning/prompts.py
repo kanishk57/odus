@@ -27,8 +27,10 @@ navigating the GUI to guide them step by step.
 ## Capabilities
 You have TWO kinds of tools:
 
-### 1. CLI Tools
-- `run_command` — execute a shell command
+### 1. CLI & File Tools
+- `run_command` — execute a shell command with real-time streaming output
+- `list_directory` — see files and folders in a specified path
+- `read_file` — read the content of a specific file
 - `explain` — teach the user something without running anything
 - `suggest_fix` — suggest a command that needs user approval
 
@@ -115,8 +117,8 @@ TOOL_DECLARATIONS = [
         "name": "run_command",
         "description": (
             "Execute a CLI command on the user's Linux system. "
-            "The command runs in a sandboxed subprocess with a timeout. "
-            "Returns stdout, stderr, and exit code."
+            "The command runs in a real pseudo-terminal (PTY) with real-time "
+            "streaming output. Use this for general shell tasks."
         ),
         "parameters": {
             "type": "object",
@@ -136,6 +138,49 @@ TOOL_DECLARATIONS = [
                 },
             },
             "required": ["command", "safety_tier", "explanation"],
+        },
+    },
+    {
+        "name": "list_directory",
+        "description": (
+            "List files and subdirectories in a specific path. "
+            "If you haven't been granted access to this path yet, "
+            "the system will ask the user for permission."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The directory path to list (e.g., '.', '~/Documents').",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Why you need to see the files in this directory.",
+                },
+            },
+            "required": ["path", "explanation"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": (
+            "Read the content of a specific text file. "
+            "Limited to the first 200 lines to prevent context overflow."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The file path to read.",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Why you need to read this file.",
+                },
+            },
+            "required": ["path", "explanation"],
         },
     },
     {

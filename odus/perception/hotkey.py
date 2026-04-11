@@ -14,7 +14,7 @@ import logging
 import os
 from typing import Callable, Awaitable
 
-from pynput import keyboard
+# from pynput import keyboard  # Moved to lazy-import in start()
 
 from odus.events import EventType, OdusEvent, get_event_bus
 
@@ -212,12 +212,16 @@ class HotkeyListener:
             except Exception as e:
                 logger.warning("EvdevHotkeyListener failed to start: %s. Falling back to pynput.", e)
 
-        self._listener = keyboard.GlobalHotKeys(
-            {self._hotkey_str: self._on_activate}
-        )
-        self._listener.daemon = True
-        self._listener.start()
-        logger.info("HotkeyListener (pynput) started — press %s to capture", self._hotkey_str)
+        try:
+            from pynput import keyboard
+            self._listener = keyboard.GlobalHotKeys(
+                {self._hotkey_str: self._on_activate}
+            )
+            self._listener.daemon = True
+            self._listener.start()
+            logger.info("HotkeyListener (pynput) started — press %s to capture", self._hotkey_str)
+        except Exception as e:
+            logger.error("HotkeyListener (pynput) failed to start: %s. Hotkeys will be unavailable.", e)
 
     def stop(self) -> None:
         """Stop the hotkey listener."""

@@ -1,20 +1,25 @@
 """
-PyQt6 Application Shell — manages multiple native windows and the event wiring.
+PyQt6 Application Shell — wires the unified window and event bus.
+
+Manages the single OdusMainWindow and routes all events between
+the agent, UI, PTY session, and file browser.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import sys
+import os
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt, QObject
 
 from odus.events import EventType, OdusEvent, get_event_bus
-from odus.ui.chat_interface import ChatInterface
-from odus.ui.mascot import MascotWindow, MascotState
+from odus.ui.main_window import OdusMainWindow
+from odus.ui.chat_interface import ChatPanel
+from odus.ui.ghost_terminal import GhostTerminal
 from odus.ui.overlay import ActionOverlay
+from odus.ui.mascot import MascotState
 from odus.ui.theme import Colors
 
 logger = logging.getLogger(__name__)
@@ -22,98 +27,104 @@ logger = logging.getLogger(__name__)
 
 class OdusApp(QObject):
     """
-    Wires the PyQt multiple-window UI and event bus together natively.
+    Wires the unified PyQt window and event bus together.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._bus = get_event_bus()
-        self._app = QApplication.instance()
-        if not self._app:
-            self._app = QApplication(sys.argv)
-            
-        # 1. Mascot Window (Floats, totally transparent EGL border)
-        self._mascot_win = MascotWindow()
-        self._mascot_win.clicked.connect(self._on_mascot_clicked)
-        
-        # In PyQt on Wayland, sometimes Tool hint masks StaysOnTop.
-        # We enforce strict StaysOnTop explicitly.
-        self._mascot_win.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self._mascot_win.setWindowFlag(Qt.WindowType.X11BypassWindowManagerHint, True) # Helps bypass strict WM layering
-        
-        # Force bottom-right starting position
-        screen = self._app.primaryScreen().geometry()
-        self._mascot_win.move(screen.width() - 150, screen.height() - 200)
-        
-        # 2. Terminal Window (Isolated standard frameless window)
-        self._terminal = ChatInterface()
-        self._terminal.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-        self._terminal.resize(450, 650)
-        
-        # 3. Action Overlay (Transparent fullscreen for visual cues)
+
+        # ── Main Window ──
+        self._window = OdusMainWindow()
+
+        # ── Content Tabs ──
+        self._chat = ChatPanel()
+        self._terminal = GhostTerminal()
+
+        self._window.add_tab("chat", self._chat)
+        self._window.add_tab("terminal", self._terminal)
+        self._window.switch_tab("chat")
+
+        # ── Action Overlay ──
         self._overlay = ActionOverlay()
 
-        # Mascot Actions
-        self._mascot_win.exit_requested.connect(self._app.quit)
-        self._mascot_win.toggle_terminal_requested.connect(self._toggle_terminal)
-        
-        # Chat Actions
-        # Connect input_submitted to the event bus for future AI interaction
-        self._terminal.input_submitted.connect(self._on_user_query)
-        
-        # Desktop action confirmations from inline chat buttons
-        self._terminal.action_confirmed.connect(self._on_action_confirmed)
+        # ── Wire Signals ──
 
+        # Mascot click → capture
+        self._window.sidebar.mascot.clicked.connect(self._on_mascot_clicked)
+
+        # Sidebar buttons
+        self._window.capture_requested.connect(self._on_capture)
+        self._window.browse_requested.connect(self._on_browse)
+
+        # Chat input
+        self._window.input_submitted.connect(self._on_user_query)
+
+        # Permission confirmations from inline cards
+        self._chat.action_confirmed.connect(self._on_action_confirmed)
+
+        # Terminal CWD
+        self._terminal.set_cwd(os.getcwd())
 
     def start(self) -> None:
-        """Launch the windows and hook into asyncio bus."""
-        self._mascot_win.show()
-        
-        # Welcome message
-        self._terminal.add_ai_message("Welcome to Odus! 🦉")
-        self._terminal.add_system_log("Press Ctrl+Shift+O to capture your screen.")
-        
+        """Launch the window and hook into asyncio bus."""
+        # Center on screen
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.geometry()
+            x = (geo.width() - self._window.width()) // 2
+            y = (geo.height() - self._window.height()) // 2
+            self._window.move(x, y)
+
+        self._window.show()
+
+        # Welcome
+        self._chat.add_ai_message("Hey there! I'm Odus 🦉 — your Linux mentor. Tap the owl or press Ctrl+Shift+O to capture your screen, or type a question below.")
+        self._chat.add_system_log("Ready — press Ctrl+Shift+O to capture.")
+
         asyncio.create_task(self._event_loop())
 
+    # ── Event Emitters ─────────────────────────────────────────────────
+
     def _on_mascot_clicked(self) -> None:
-        """User clicked the Mascot, force a screen capture!"""
         asyncio.ensure_future(self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED)))
 
+    def _on_capture(self) -> None:
+        asyncio.ensure_future(self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED)))
+
+    def _on_browse(self) -> None:
+        asyncio.ensure_future(
+            self._bus.emit(OdusEvent(EventType.PERMISSION_REQUESTED, {
+                "resource_type": "directory",
+                "path": os.getcwd(),
+                "description": "Browse current project directory",
+            }))
+        )
+
     def _on_user_query(self, query: str) -> None:
-        """User typed something in the chat pill."""
-        # Trigger an analysis with the user's query as context
+        self._chat.add_user_message(query)
         asyncio.ensure_future(
             self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED, {"query": query}))
         )
 
     def _on_action_confirmed(self, action_data: dict) -> None:
-        """User approved an inline desktop action in the chat."""
-        asyncio.ensure_future(
-            self._bus.emit(OdusEvent(EventType.INPUT_ACTION_CONFIRMED, {
-                "action": action_data,
-            }))
-        )
-
-    def _toggle_terminal(self) -> None:
-        if self._terminal.isVisible():
-            self._terminal.hide()
+        # Route based on action type
+        if action_data.get("resource_type") == "directory":
+            asyncio.ensure_future(
+                self._bus.emit(OdusEvent(EventType.PERMISSION_GRANTED, action_data))
+            )
+        elif action_data.get("command"):
+            asyncio.ensure_future(
+                self._bus.emit(OdusEvent(EventType.USER_CONFIRMED, action_data))
+            )
         else:
-            self._show_terminal()
+            asyncio.ensure_future(
+                self._bus.emit(OdusEvent(EventType.INPUT_ACTION_CONFIRMED, action_data))
+            )
 
-    def _show_terminal(self) -> None:
-        """Ensure the terminal is visible, anchored next to the mascot, and on top."""
-        # Anchor next to the Mascot
-        m_pos = self._mascot_win.pos()
-        # Try to place to the left, but clamp to 0
-        target_x = max(0, m_pos.x() - self._terminal.width() - 20)
-        self._terminal.move(target_x, m_pos.y())
-        
-        self._terminal.show()
-        self._terminal.raise_()
-        self._terminal.activateWindow()
+    # ── Event Loop ─────────────────────────────────────────────────────
 
     async def _event_loop(self) -> None:
-        """Listen for events on the bus."""
         listener = self._bus.listen()
         async for event in listener:
             try:
@@ -122,88 +133,63 @@ class OdusApp(QObject):
                 logger.error("UI event handler error: %s", e, exc_info=True)
 
     async def _handle_event(self, event: OdusEvent) -> None:
+
+        # ── Capture Pipeline ──
+
         if event.type == EventType.CAPTURE_STARTED:
-            self._mascot_win.set_state(MascotState.THINKING)
-            self._terminal.add_system_log("📸 Capturing screen...")
+            self._window.mascot.set_state(MascotState.THINKING)
+            self._window.sidebar.set_status("Capturing...", Colors.ACCENT)
+            self._chat.add_system_log("📸 Capturing screen...")
 
         elif event.type == EventType.CAPTURE_DONE:
             size_kb = event.payload.get("size_bytes", 0) / 1024
-            self._terminal.add_system_log(
-                f"Screen captured ({event.payload.get('width', '?')}x"
-                f"{event.payload.get('height', '?')}, {size_kb:.0f} KB)",
-                color=Colors.SUCCESS
+            self._chat.add_system_log(
+                f"Captured ({event.payload.get('width', '?')}×{event.payload.get('height', '?')}, {size_kb:.0f} KB)",
+                color=Colors.SUCCESS,
             )
 
         elif event.type == EventType.ANALYSIS_STARTED:
-            self._terminal.add_system_log("🧠 Analyzing with Gemini Vision...")
-
+            self._window.sidebar.set_status("Analyzing...", Colors.ACCENT)
+            self._chat.add_system_log("🧠 Analyzing with Gemini...")
 
         elif event.type == EventType.ANALYSIS_DONE:
-            self._mascot_win.set_state(MascotState.SUCCESS)
-            self._show_terminal()
+            self._window.mascot.set_state(MascotState.SUCCESS)
+            self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
             payload = event.payload
 
-            # Use AI Bubbles for the primary summary and explanation
-            self._terminal.add_ai_message(payload.get('summary', ''))
-            self._terminal.add_ai_message(payload.get("explanation", ""))
+            self._chat.add_ai_message(payload.get("summary", ""))
+            explanation = payload.get("explanation", "")
+            if explanation and explanation != payload.get("summary", ""):
+                self._chat.add_ai_message(explanation)
 
             if payload.get("warning"):
-                self._terminal.add_system_log(payload["warning"], color=Colors.WARNING)
+                self._chat.add_system_log(payload["warning"], color=Colors.WARNING)
             if payload.get("follow_up"):
-                self._terminal.add_system_log(f"💡 {payload['follow_up']}")
+                self._chat.add_system_log(f"💡 {payload['follow_up']}")
+
+        # ── Command Confirmation ──
 
         elif event.type == EventType.CONFIRM_REQUIRED:
-            self._mascot_win.set_state(MascotState.WARNING)
-            self._show_terminal()
+            self._window.mascot.set_state(MascotState.WARNING)
+            self._window.sidebar.set_tier(2)
             payload = event.payload
 
-            self._terminal.add_system_log(f"⚠️ {payload.get('summary', '')}", color=Colors.WARNING)
-            self._terminal.add_ai_message(payload.get("explanation", ""))
-            
             command = payload.get("command", "")
-            self._terminal.add_system_log(f"$ {command}", color=Colors.ACCENT)
-            self._terminal.add_system_log("This command needs your approval.", color=Colors.WARNING)
-
-            # Use non-blocking dialog to avoid nested event loop crashes with qasync.
-            # msgBox.exec() starts a nested Qt loop that conflicts with asyncio.
-            self._active_msgbox = QMessageBox()
-            self._active_msgbox.setWindowTitle("Odus — Action Required")
-            self._active_msgbox.setText(f"Odus wants to run:\n\n{command}")
-            self._active_msgbox.setInformativeText(payload.get("explanation", ""))
-            
+            explanation = payload.get("explanation", "")
             tier = payload.get("safety_tier", 2)
-            if tier == 3:
-                self._active_msgbox.setIcon(QMessageBox.Icon.Critical)
-            elif tier == 2:
-                self._active_msgbox.setIcon(QMessageBox.Icon.Warning)
-            else:
-                self._active_msgbox.setIcon(QMessageBox.Icon.Information)
 
-            self._active_msgbox.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
-            self._active_msgbox.setDefaultButton(QMessageBox.StandardButton.Cancel)
-
-            def _on_confirm_finished(result):
-                if result == QMessageBox.StandardButton.Ok:
-                    asyncio.ensure_future(
-                        self._bus.emit(
-                            OdusEvent(EventType.USER_CONFIRMED, {
-                                "command": command,
-                                "explanation": payload.get("explanation", ""),
-                            })
-                        )
-                    )
-                else:
-                    self._terminal.add_system_log("Action cancelled by user.")
-                    self._mascot_win.set_state(MascotState.IDLE)
-                self._active_msgbox = None
-
-            self._active_msgbox.finished.connect(_on_confirm_finished)
-            self._active_msgbox.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
-            self._active_msgbox.open()  # Non-blocking — no nested event loop
-
+            # Inline permission card instead of QMessageBox
+            self._chat.add_permission_card(
+                title="Command Execution",
+                description=explanation,
+                action_data={"command": command, "explanation": explanation},
+                tier=tier,
+            )
 
         elif event.type == EventType.EXECUTION_STARTED:
-            self._terminal.add_system_log("⚡ Executing command...")
+            self._window.switch_tab("terminal")
+            self._window.sidebar.set_status("Executing...", Colors.ACCENT)
+            self._chat.add_system_log("⚡ Executing...")
 
         elif event.type == EventType.EXECUTION_DONE:
             result = event.payload.get("result", {})
@@ -212,116 +198,157 @@ class OdusApp(QObject):
             if status == "executed":
                 rc = result.get("return_code", -1)
                 if rc == 0:
-                    self._mascot_win.set_state(MascotState.SUCCESS)
-                    self._terminal.add_system_log("Command executed successfully!", color=Colors.SUCCESS)
+                    self._window.mascot.set_state(MascotState.SUCCESS)
+                    self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
+                    self._window.sidebar.set_tier(1)
+                    self._terminal.add_success("Command succeeded")
                 else:
-                    self._mascot_win.set_state(MascotState.ERROR)
-                    self._terminal.add_system_log(f"Command exited with code {rc}", color=Colors.DANGER)
+                    self._window.mascot.set_state(MascotState.ERROR)
+                    self._window.sidebar.set_status("Error", Colors.DANGER)
+                    self._terminal.add_error(f"Exited with code {rc}")
 
                 if result.get("stdout"):
-                    self._terminal.add_system_log(result["stdout"], color=Colors.TEXT_SECONDARY)
+                    self._terminal.add_output(result["stdout"])
                 if result.get("stderr"):
-                    self._terminal.add_system_log(result["stderr"], color=Colors.DANGER)
+                    self._terminal.add_error(result["stderr"])
 
             elif status == "blocked":
-                self._mascot_win.set_state(MascotState.ERROR)
-                self._terminal.add_system_log(
-                    f"🚫 {result.get('reason', 'Command was blocked.')}",
-                    color=Colors.DANGER
+                self._window.mascot.set_state(MascotState.ERROR)
+                self._window.sidebar.set_tier(3)
+                self._chat.add_system_log(
+                    f"🚫 {result.get('reason', 'Blocked')}",
+                    color=Colors.DANGER,
                 )
 
-        # ── Multi-Step Plan Events ─────────────────────────────────────
+        # ── Multi-Step Plan ──
 
         elif event.type == EventType.AGENT_PLAN_CREATED:
-            self._mascot_win.set_state(MascotState.THINKING)
-            self._show_terminal()
+            self._window.mascot.set_state(MascotState.THINKING)
+            self._window.sidebar.set_status("Planning...", Colors.ACCENT)
             payload = event.payload
-            self._terminal.add_action_plan(
+            self._chat.add_action_plan(
                 summary=payload.get("explanation", payload.get("summary", "")),
                 steps=payload.get("plan", []),
             )
 
         elif event.type == EventType.AGENT_STEP_STARTED:
             step = event.payload.get("step", 0)
-            self._terminal.update_action_step(step, "running")
+            self._chat.update_action_step(step, "running")
 
         elif event.type == EventType.AGENT_STEP_DONE:
             step = event.payload.get("step", 0)
-            self._terminal.update_action_step(step, "done")
+            self._chat.update_action_step(step, "done")
 
         elif event.type == EventType.AGENT_PLAN_DONE:
-            self._mascot_win.set_state(MascotState.SUCCESS)
+            self._window.mascot.set_state(MascotState.SUCCESS)
+            self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
             total = event.payload.get("total_steps", 0)
-            self._terminal.add_system_log(
-                f"✅ All {total} steps completed!",
-                color=Colors.SUCCESS,
-            )
+            self._chat.add_system_log(f"✅ All {total} steps completed!", color=Colors.SUCCESS)
 
-        # ── Input Action Events ────────────────────────────────────────
+        # ── Input Actions ──
 
         elif event.type == EventType.INPUT_ACTION_PLANNED:
-            self._mascot_win.set_state(MascotState.WARNING)
-            self._show_terminal()
+            self._window.mascot.set_state(MascotState.WARNING)
             payload = event.payload
             action = payload.get("action", {})
             action_type = action.get("action_type", "")
             explanation = action.get("explanation", "")
 
-            # Show visual overlay at target coordinates
+            # Show overlay
             if action_type == "move_and_click":
-                x = action.get("x", 0)
-                y = action.get("y", 0)
+                x, y = action.get("x", 0), action.get("y", 0)
                 target = action.get("target_description", "")
                 self._overlay.show_crosshair(x, y, label=f"Click: {target}")
-
             elif action_type == "highlight_area":
                 self._overlay.show_highlight(
-                    x=action.get("x", 0),
-                    y=action.get("y", 0),
-                    w=action.get("width", 100),
-                    h=action.get("height", 100),
+                    x=action.get("x", 0), y=action.get("y", 0),
+                    w=action.get("width", 100), h=action.get("height", 100),
                     label=explanation,
                 )
 
-            # Show inline confirmation in chat
-            desc = f"{action_type}: {explanation}"
-            self._terminal.add_action_confirmation(desc, payload)
+            # Inline permission card
+            self._chat.add_permission_card(
+                title=f"Desktop Action: {action_type}",
+                description=explanation,
+                action_data=payload,
+                tier=2,
+            )
 
         elif event.type == EventType.INPUT_ACTION_EXECUTING:
-            self._terminal.add_system_log(
-                f"🎯 Executing: {event.payload.get('description', '')}",
+            self._chat.add_system_log(
+                f"🎯 {event.payload.get('description', 'Executing...')}",
                 color=Colors.ACCENT,
             )
 
         elif event.type == EventType.INPUT_ACTION_DONE:
             self._overlay.dismiss()
-            self._mascot_win.set_state(MascotState.SUCCESS)
+            self._window.mascot.set_state(MascotState.SUCCESS)
             result = event.payload.get("result", {})
-            self._terminal.add_system_log(
-                f"✅ {result.get('description', 'Action completed')}",
+            self._chat.add_system_log(
+                f"✅ {result.get('description', 'Done')}",
                 color=Colors.SUCCESS,
             )
 
         elif event.type == EventType.INPUT_ACTION_FAILED:
             self._overlay.dismiss()
-            self._mascot_win.set_state(MascotState.ERROR)
-            step = event.payload.get("step", "")
-            reason = event.payload.get("reason", "Unknown error")
-            prefix = f"Step {step}: " if step else ""
-            self._terminal.add_system_log(
-                f"❌ {prefix}{reason}",
+            self._window.mascot.set_state(MascotState.ERROR)
+            self._chat.add_system_log(
+                f"❌ {event.payload.get('reason', 'Failed')}",
                 color=Colors.DANGER,
             )
 
+        # ── Permission Events ──
+
+        elif event.type == EventType.PERMISSION_REQUESTED:
+            path = event.payload.get("path", "")
+            desc = event.payload.get("description", f"Access to {path}")
+            self._chat.add_permission_card(
+                title="Directory Access",
+                description=desc,
+                action_data=event.payload,
+                tier=1,
+            )
+
+        elif event.type == EventType.PERMISSION_GRANTED:
+            path = event.payload.get("path", "")
+            self._chat.add_system_log(f"✅ Access granted: {path}", color=Colors.SUCCESS)
+
+        elif event.type == EventType.PERMISSION_DENIED:
+            path = event.payload.get("path", "")
+            self._chat.add_system_log(f"🚫 Access denied: {path}", color=Colors.DANGER)
+
+        # ── Terminal Streaming ──
+
+        elif event.type == EventType.TERMINAL_OUTPUT_LINE:
+            line = event.payload.get("line", "")
+            self._terminal.add_stream_line(line)
+
+        elif event.type == EventType.TERMINAL_COMMAND_STARTED:
+            cmd = event.payload.get("command", "")
+            self._terminal.add_command(cmd)
+            self._window.switch_tab("terminal")
+
+        elif event.type == EventType.TERMINAL_COMMAND_DONE:
+            rc = event.payload.get("exit_code", 0)
+            if rc == 0:
+                self._terminal.add_success("Command finished")
+            else:
+                self._terminal.add_error(f"Exited with code {rc}")
+            self._terminal.add_divider()
+
+        elif event.type == EventType.TERMINAL_CWD_CHANGED:
+            new_cwd = event.payload.get("cwd", "")
+            self._terminal.set_cwd(new_cwd)
+
+        # ── System ──
+
         elif event.type == EventType.ERROR:
-            self._mascot_win.set_state(MascotState.ERROR)
-            self._show_terminal()
-            self._terminal.add_system_log(
-                f"Error: {event.payload.get('message', 'Unknown error')}",
-                color=Colors.DANGER
+            self._window.mascot.set_state(MascotState.ERROR)
+            self._window.sidebar.set_status("Error", Colors.DANGER)
+            self._chat.add_system_log(
+                f"Error: {event.payload.get('message', 'Unknown')}",
+                color=Colors.DANGER,
             )
 
         elif event.type == EventType.STATUS_UPDATE:
-            self._terminal.add_system_log(
-                event.payload.get("message", "")
-            )
+            self._chat.add_system_log(event.payload.get("message", ""))

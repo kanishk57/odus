@@ -6,54 +6,68 @@ DEV 2 owns this module.
 These are the Python implementations of the tools declared in prompts.py.
 The agent calls these after the Vision API requests a function call.
 
-Includes both CLI tools and desktop control (input simulation) tools.
+Includes CLI tools (streaming), File tools (sandboxed), and desktop control tools.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from typing import AsyncGenerator
 
-from odus.action.executor import CommandExecutor, ExecutionResult
+from odus.action.pty_session import PtySession
+from odus.action.file_browser import FileBrowser, FileEntry
 from odus.action.safety import SafetyGate, SafetyVerdict
 from odus.action.input_sim import get_input_simulator, InputActionResult
+from odus.events import OdusEvent, EventType, get_event_bus
 
 logger = logging.getLogger(__name__)
 
 # Singleton instances (lazy-initialized)
-_executor: CommandExecutor | None = None
+_pty: PtySession | None = None
+_browser: FileBrowser | None = None
 _safety: SafetyGate | None = None
 
 
-def _get_executor() -> CommandExecutor:
-    global _executor
-    if _executor is None:
-        _executor = CommandExecutor()
-    return _executor
+def get_pty() -> PtySession:
+    global _pty
+    if _pty is None:
+        _pty = PtySession()
+    return _pty
 
 
-def _get_safety() -> SafetyGate:
+def get_browser() -> FileBrowser:
+    global _browser
+    if _browser is None:
+        _browser = FileBrowser()
+    return _browser
+
+
+def get_safety() -> SafetyGate:
     global _safety
     if _safety is None:
         _safety = SafetyGate()
     return _safety
 
 
-# ── CLI Tools ──────────────────────────────────────────────────────────
+async def _emit(event_type: EventType, payload: dict = None):
+    await get_event_bus().emit(OdusEvent(event_type, payload or {}))
 
-def tool_run_command(
+
+# ── CLI & Terminal Tools ────────────────────────────────────────────────
+
+async def tool_run_command(
     command: str,
     safety_tier: int,
     explanation: str,
 ) -> dict:
     """
-    Execute a CLI command through the safety gate.
-
-    Returns a dict with execution results and safety verdict.
+    Execute a CLI command in a real PTY with real-time streaming output.
     """
-    safety = _get_safety()
-    executor = _get_executor()
+    safety = get_safety()
+    pty = get_pty()
 
-    # Double-check safety: model's tier vs our regex classifier
+    # Safety check
     verdict = safety.classify(command)
 
     if verdict == SafetyVerdict.BLOCKED:
@@ -66,7 +80,6 @@ def tool_run_command(
         }
 
     if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
-        # Return a signal that the UI should show a confirmation dialog
         return {
             "status": "needs_confirmation",
             "command": command,
@@ -74,41 +87,88 @@ def tool_run_command(
             "safety_tier": 2,
         }
 
-    # Tier 1 — safe, auto-execute
-    result: ExecutionResult = executor.run(command)
+    # Tier 1 — auto-execute
+    await _emit(EventType.TERMINAL_COMMAND_STARTED, {"command": command})
+    
+    full_output = []
+    async for line in pty.execute(command):
+        full_output.append(line)
+        await _emit(EventType.TERMINAL_OUTPUT_LINE, {"line": line})
+
+    # Check if CWD changed
+    await _emit(EventType.TERMINAL_CWD_CHANGED, {"cwd": pty.cwd})
+    await _emit(EventType.TERMINAL_COMMAND_DONE, {"command": command, "exit_code": 0})
+
     return {
         "status": "executed",
         "command": command,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "return_code": result.return_code,
-        "timed_out": result.timed_out,
+        "output": "\n".join(full_output),
+        "cwd": pty.cwd,
     }
 
 
-def tool_explain(topic: str, explanation: str) -> dict:
-    """Provide an educational explanation without executing anything."""
-    return {
-        "status": "explained",
-        "topic": topic,
-        "explanation": explanation,
-    }
+# ── File Tools ──────────────────────────────────────────────────────────
 
-
-def tool_suggest_fix(
-    command: str,
-    safety_tier: int,
+async def tool_list_directory(
+    path: str,
     explanation: str,
-    risk_warning: str = "",
 ) -> dict:
-    """Suggest a fix that needs user confirmation before execution."""
-    return {
-        "status": "needs_confirmation",
-        "command": command,
-        "safety_tier": safety_tier,
-        "explanation": explanation,
-        "risk_warning": risk_warning,
-    }
+    """List files in a directory, checking permissions first."""
+    browser = get_browser()
+    
+    if browser.needs_permission(path):
+        return {
+            "status": "needs_permission",
+            "resource_type": "directory",
+            "path": path,
+            "description": explanation,
+        }
+    
+    try:
+        entries = await browser.list_directory(path)
+        return {
+            "status": "success",
+            "path": path,
+            "entries": [
+                {"name": e.name, "is_dir": e.is_dir, "size": e.size}
+                for e in entries
+            ],
+            "explanation": explanation,
+        }
+    except Exception as e:
+        return {"status": "error", "reason": str(e)}
+
+
+async def tool_read_file(
+    path: str,
+    explanation: str,
+) -> dict:
+    """Read a file's content, checking permissions first."""
+    browser = get_browser()
+    
+    # Resolve parent dir for permission check
+    abs_path = os.path.abspath(os.path.expanduser(path))
+    parent = os.path.dirname(abs_path)
+
+    if browser.needs_permission(parent):
+        return {
+            "status": "needs_permission",
+            "resource_type": "file",
+            "path": path,
+            "parent_path": parent,
+            "description": explanation,
+        }
+        
+    try:
+        content = await browser.read_file(path)
+        return {
+            "status": "success",
+            "path": path,
+            "content": content,
+            "explanation": explanation,
+        }
+    except Exception as e:
+        return {"status": "error", "reason": str(e)}
 
 
 # ── Desktop Control Tools ──────────────────────────────────────────────
@@ -122,36 +182,25 @@ async def tool_move_and_click(
     button: str = "left",
     click_type: str = "single",
 ) -> dict:
-    """
-    Move the mouse and click at screen coordinates.
-
-    Checks safety gate before executing. Returns action result.
-    """
-    safety = _get_safety()
+    """Move mouse and click, checking safety gate."""
+    safety = get_safety()
     verdict = safety.classify_input_action("click", target_description)
 
     if verdict == SafetyVerdict.BLOCKED:
-        logger.warning("🚫 BLOCKED click on: %s", target_description)
         return {
             "status": "blocked",
-            "action_type": "move_and_click",
             "reason": f"Click on '{target_description}' was blocked for safety.",
-            "explanation": explanation,
         }
 
     if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
         return {
             "status": "needs_confirmation",
             "action_type": "move_and_click",
-            "x": x, "y": y,
-            "button": button,
-            "click_type": click_type,
+            "x": x, "y": y, "button": button, "click_type": click_type,
             "target_description": target_description,
-            "safety_tier": 2,
             "explanation": explanation,
         }
 
-    # Safe — execute directly
     sim = get_input_simulator()
     if click_type == "double":
         result = await sim.double_click(x, y)
@@ -169,32 +218,19 @@ async def tool_type_text(
     safety_tier: int,
     explanation: str,
 ) -> dict:
-    """
-    Type text into the focused element.
-
-    Always requires confirmation since it modifies state.
-    """
-    safety = _get_safety()
+    """Type text, always requiring confirmation if cautioned."""
+    safety = get_safety()
     verdict = safety.classify_input_action("type_text", target_description)
 
     if verdict == SafetyVerdict.BLOCKED:
-        logger.warning("🚫 BLOCKED type_text on: %s", target_description)
-        return {
-            "status": "blocked",
-            "action_type": "type_text",
-            "reason": f"Typing in '{target_description}' was blocked for safety.",
-            "explanation": explanation,
-        }
+        return {"status": "blocked", "reason": "Typing here is blocked."}
 
     if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
-        preview = text[:60] + ("..." if len(text) > 60 else "")
         return {
             "status": "needs_confirmation",
             "action_type": "type_text",
             "text": text,
-            "text_preview": preview,
             "target_description": target_description,
-            "safety_tier": 2,
             "explanation": explanation,
         }
 
@@ -209,33 +245,19 @@ async def tool_press_key(
     safety_tier: int,
     explanation: str,
 ) -> dict:
-    """
-    Press a key or key combination.
-
-    Single keys: ["enter"], ["tab"], ["escape"]
-    Combos: ["ctrl", "s"], ["ctrl", "shift", "t"]
-    """
-    safety = _get_safety()
+    """Press keyboard keys."""
+    safety = get_safety()
     verdict = safety.classify_input_action("press_key", target_description)
 
     if verdict == SafetyVerdict.BLOCKED:
-        logger.warning("🚫 BLOCKED press_key on: %s", target_description)
-        return {
-            "status": "blocked",
-            "action_type": "press_key",
-            "reason": f"Key press on '{target_description}' was blocked for safety.",
-            "explanation": explanation,
-        }
+        return {"status": "blocked", "reason": "Key press blocked."}
 
     if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
-        combo = "+".join(keys)
         return {
             "status": "needs_confirmation",
             "action_type": "press_key",
             "keys": keys,
-            "combo": combo,
             "target_description": target_description,
-            "safety_tier": 2,
             "explanation": explanation,
         }
 
@@ -252,9 +274,7 @@ async def tool_scroll_screen(
     explanation: str,
     amount: int = 3,
 ) -> dict:
-    """
-    Scroll the screen. Always safe — no safety gate needed.
-    """
+    """Scroll the screen."""
     sim = get_input_simulator()
     result = await sim.scroll(direction, amount)
     return _format_input_result(result, explanation)
@@ -267,30 +287,34 @@ async def tool_highlight_area(
     height: int,
     explanation: str,
 ) -> dict:
-    """
-    Draw a visual highlight on the screen.
-
-    This is purely visual and always safe.
-    Returns coordinates for the UI overlay to render.
-    """
+    """Visual highlight."""
     return {
         "status": "highlight",
         "action_type": "highlight_area",
-        "x": x, "y": y,
-        "width": width, "height": height,
+        "x": x, "y": y, "width": width, "height": height,
         "explanation": explanation,
     }
 
 
-# ── Helpers ────────────────────────────────────────────────────────────
+def tool_explain(topic: str, explanation: str) -> dict:
+    return {"status": "explained", "topic": topic, "explanation": explanation}
+
+
+def tool_suggest_fix(command: str, safety_tier: int, explanation: str, risk_warning: str = "") -> dict:
+    return {
+        "status": "needs_confirmation",
+        "command": command,
+        "safety_tier": safety_tier,
+        "explanation": explanation,
+        "risk_warning": risk_warning,
+    }
+
 
 def _format_input_result(result: InputActionResult, explanation: str) -> dict:
-    """Convert an InputActionResult to a tool response dict."""
     return {
         "status": "executed" if result.success else "failed",
         "action_type": result.action_type.value,
         "description": result.description,
         "error": result.error,
-        "duration_ms": result.duration_ms,
         "explanation": explanation,
     }

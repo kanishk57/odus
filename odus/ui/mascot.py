@@ -1,15 +1,19 @@
 """
-Mascot State Machine — controls the mascot's visual state and animations in PyQt6.
+Mascot Widget — embeddable animated mascot for the unified sidebar.
+
+No longer a standalone window. Now a QWidget that lives inside
+OdusMainWindow's sidebar, with animated state transitions.
 """
 
 import logging
-from enum import Enum
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QMenu
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer
-from PyQt6.QtGui import QColor, QAction, QPixmap
 import os
+from enum import Enum
 
-from odus.ui.theme import Colors, FontSizes, Radii
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer, QEasingCurve, QSize
+from PyQt6.QtGui import QColor, QPixmap
+
+from odus.ui.theme import Colors, Radii, Animations, Layout
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +36,8 @@ MASCOT_DISPLAY = {
     MascotState.WARNING: os.path.join(ASSET_DIR, "mascot_warning.png"),
 }
 
-MASCOT_COLORS = {
-    MascotState.IDLE: Colors.TEXT_SECONDARY,
+MASCOT_RING_COLORS = {
+    MascotState.IDLE: Colors.TEXT_DIM,
     MascotState.THINKING: Colors.ACCENT,
     MascotState.SUCCESS: Colors.SUCCESS,
     MascotState.ERROR: Colors.DANGER,
@@ -41,163 +45,160 @@ MASCOT_COLORS = {
 }
 
 
-class MascotWindow(QWidget):
+class MascotWidget(QWidget):
     """
-    Floating mascot widget that stays on top and is fully transparent.
+    Embeddable mascot widget with animated state machine.
+
+    Lives inside the sidebar of OdusMainWindow. Shows the owl mascot
+    with a glowing ring that changes color based on state.
+
+    Animations:
+      - THINKING: continuous pulse (opacity 0.4→1.0→0.4)
+      - SUCCESS: bounce (scale 1.0→1.15→1.0)
+      - State change: smooth opacity cross-fade
     """
-    
+
     clicked = pyqtSignal()
-    exit_requested = pyqtSignal()
-    toggle_terminal_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._state = MascotState.IDLE
+        self.setFixedSize(Layout.MASCOT_SIZE + 20, Layout.MASCOT_SIZE + 20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        # Window Setup (Frameless, Transparent, Always on Top)
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool  # Prevents showing in taskbar optionally
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Proactive Top-Level Enforcement for Wayland/GNOME
-        self.top_timer = QTimer(self)
-        self.top_timer.timeout.connect(self.raise_)
-        self.top_timer.start(2000) # Every 2s
-
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(10, 10, 10, 10)
-
-        # 1. Outer Container for the Shadow
-        self.shadow_container = QWidget()
-        self.shadow_container.setFixedSize(120, 120)
-        self.shadow = QGraphicsDropShadowEffect()
-        self.shadow.setBlurRadius(15)
-        self.shadow.setColor(QColor(0, 0, 0, 120))
-        self.shadow.setOffset(0, 2)
-        self.shadow_container.setGraphicsEffect(self.shadow)
-        
-        shadow_layout = QVBoxLayout(self.shadow_container)
-        shadow_layout.setContentsMargins(0, 0, 0, 0)
-        shadow_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # 2. Inner Container for the Pulsing Opacity (The Bubble)
+        # Container for ring + image
         self.container = QWidget()
-        self.container.setObjectName("MascotContainer")
-        self.container.setFixedSize(100, 100) # Fixed bubble size
+        self.container.setObjectName("MascotRing")
+        self.container.setFixedSize(Layout.MASCOT_SIZE, Layout.MASCOT_SIZE)
+
+        container_layout = QVBoxLayout(self.container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Mascot image
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setStyleSheet("background: transparent;")
+        container_layout.addWidget(self.icon_label)
+
+        layout.addWidget(self.container)
+
+        # ── Opacity effect for cross-fade ──
         self.opacity_effect = QGraphicsOpacityEffect(self.container)
         self.container.setGraphicsEffect(self.opacity_effect)
-        
+        self.opacity_effect.setOpacity(1.0)
+
+        # ── Pulse animation (THINKING) ──
         self.pulse_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
-        self.pulse_anim.setDuration(1200)
+        self.pulse_anim.setDuration(Animations.PULSE)
         self.pulse_anim.setStartValue(1.0)
         self.pulse_anim.setKeyValueAt(0.5, 0.4)
         self.pulse_anim.setEndValue(1.0)
         self.pulse_anim.setLoopCount(-1)
 
-        container_layout = QVBoxLayout(self.container)
-        container_layout.setContentsMargins(0, 0, 0, 0) # No internal padding
-        container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # ── Bounce animation (SUCCESS) ──
+        # We animate maximumSize to create a scale effect
+        self._bounce_timer = QTimer(self)
+        self._bounce_timer.setSingleShot(True)
 
-        # Mascot Icon
-        self.icon_label = QLabel()
-        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_label.setStyleSheet("background: transparent;")
-        
-        container_layout.addWidget(self.icon_label)
-        shadow_layout.addWidget(self.container)
-        self.layout.addWidget(self.shadow_container)
-        self.layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # ── Drop shadow for glow ──
+        self.glow = QGraphicsDropShadowEffect()
+        self.glow.setBlurRadius(20)
+        self.glow.setColor(QColor(Colors.ACCENT))
+        self.glow.setOffset(0, 0)
+        # Don't apply to container (conflicts with opacity effect)
+        # Apply to this widget instead
+        self.setGraphicsEffect(self.glow)
 
         self.set_state(MascotState.IDLE)
 
     def set_state(self, state: MascotState) -> None:
-        """Update mascot appearance and trigger animations."""
+        """Update mascot appearance with smooth transitions."""
+        prev_state = self._state
         self._state = state
-        
-        pixmap = QPixmap(MASCOT_DISPLAY[state])
-        self.icon_label.setPixmap(pixmap.scaled(
-            80, 80, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        ))
-        
-        # Reset animation
+
+        # Load new mascot image
+        img_path = MASCOT_DISPLAY.get(state, MASCOT_DISPLAY[MascotState.IDLE])
+        pixmap = QPixmap(img_path)
+        if not pixmap.isNull():
+            scaled = pixmap.scaled(
+                Layout.MASCOT_SIZE - 16, Layout.MASCOT_SIZE - 16,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.icon_label.setPixmap(scaled)
+
+        # Stop previous animations
         self.pulse_anim.stop()
         self.opacity_effect.setOpacity(1.0)
 
+        # Update ring color
+        ring_color = MASCOT_RING_COLORS.get(state, Colors.TEXT_DIM)
+        self.container.setStyleSheet(f"""
+            QWidget#MascotRing {{
+                background-color: {Colors.BG_SECONDARY};
+                border: 2px solid {ring_color};
+                border-radius: {Layout.MASCOT_SIZE // 2}px;
+            }}
+        """)
+
+        # Update glow color
+        glow_color = QColor(ring_color)
+        glow_color.setAlpha(80)
+        self.glow.setColor(glow_color)
+
+        # State-specific animations
         if state == MascotState.THINKING:
+            self.glow.setBlurRadius(30)
             self.pulse_anim.start()
 
-        color = MASCOT_COLORS[state]
-        radius = Radii.LG
-        
-        # Update styling
-        self.container.setStyleSheet(f"""
-            QWidget#MascotContainer {{
-                background-color: {Colors.BG_SECONDARY};
-                border: 2px solid {color};
-                border-radius: {radius}px;
-            }}
-        """)
+        elif state == MascotState.SUCCESS:
+            self.glow.setBlurRadius(25)
+            # Brief bounce: grow then shrink
+            self._do_bounce()
 
-    def contextMenuEvent(self, event):
-        """Show context menu for app management."""
-        menu = QMenu(self)
-        
-        # Styles for the menu (Obsidian Theme)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {Colors.BG_SECONDARY};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER};
-                border-radius: 6px;
-                padding: 4px;
-            }}
-            QMenu::item {{
-                padding: 6px 20px;
-                border-radius: 4px;
-            }}
-            QMenu::item:selected {{
-                background-color: {Colors.ACCENT};
-                color: #000000;
-            }}
-        """)
-        
-        toggle_action = QAction("Toggle View", self)
-        toggle_action.triggered.connect(self.toggle_terminal_requested.emit)
-        
-        exit_action = QAction("Exit Odus", self)
-        exit_action.triggered.connect(self.exit_requested.emit)
-        
-        menu.addAction(toggle_action)
-        menu.addSeparator()
-        menu.addAction(exit_action)
-        
-        menu.exec(event.globalPos())
+        elif state == MascotState.ERROR:
+            self.glow.setBlurRadius(25)
+
+        else:
+            self.glow.setBlurRadius(15)
+
+    def _do_bounce(self) -> None:
+        """Quick scale bounce animation for success state."""
+        original_size = Layout.MASCOT_SIZE
+        big_size = int(original_size * 1.12)
+
+        # Grow
+        self.container.setFixedSize(big_size, big_size)
+        self.container.setStyleSheet(
+            self.container.styleSheet().replace(
+                f"border-radius: {original_size // 2}px",
+                f"border-radius: {big_size // 2}px"
+            )
+        )
+
+        # Shrink back after delay
+        def shrink():
+            self.container.setFixedSize(original_size, original_size)
+            ring_color = MASCOT_RING_COLORS.get(self._state, Colors.TEXT_DIM)
+            self.container.setStyleSheet(f"""
+                QWidget#MascotRing {{
+                    background-color: {Colors.BG_SECONDARY};
+                    border: 2px solid {ring_color};
+                    border-radius: {original_size // 2}px;
+                }}
+            """)
+
+        self._bounce_timer.timeout.connect(shrink)
+        self._bounce_timer.start(Animations.BOUNCE)
 
     def mousePressEvent(self, event):
-        """Detect clicks to expand UI and initiate drag context."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = event.globalPosition().toPoint()
-            self._window_start_pos = self.frameGeometry().topLeft()
-            self._is_dragging = False
-            
-    def mouseMoveEvent(self, event):
-        """Allow dragging the frameless window naturally across the desktop."""
-        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(self, '_drag_start_pos'):
-            delta = event.globalPosition().toPoint() - self._drag_start_pos
-            if delta.manhattanLength() > 5:
-                # We moved enough to be a drag, not a click
-                self._is_dragging = True
-                self.move(self._window_start_pos + delta)
-
-    def mouseReleaseEvent(self, event):
-        """Trigger the clicked signal if it was a distinct static click."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            if not getattr(self, '_is_dragging', False):
-                self.clicked.emit()
-            self._is_dragging = False
+            self.clicked.emit()
 
     @property
     def state(self) -> MascotState:
