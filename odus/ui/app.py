@@ -54,16 +54,17 @@ class OdusApp:
         # ── Window setup ────────────────────────────────────────────
         page.title = "Odus Mascot"
         
-        # Make the window frameless and always on top
-        page.window.frameless = True
-        page.window.title_bar_hidden = True
+        # Make the window always on top, but RESTORE frames so the user can drag it
+        # Wayland rigidly blocks Flet's transparent frameless implementations.
+        page.window.frameless = False
+        page.window.title_bar_hidden = False
         page.window.always_on_top = True
         
-        # Default to the small (collapsed) state to avoid the black box bug on Linux Wayland
+        # Start in compact widget mode
         page.window.width = Layout.MASCOT_WIDTH + 60
-        page.window.height = Layout.MASCOT_HEIGHT + 60
-        page.bgcolor = ft.Colors.TRANSPARENT
-        page.window.bgcolor = ft.Colors.TRANSPARENT
+        page.window.height = Layout.MASCOT_HEIGHT + 100
+        page.bgcolor = Colors.BG_PRIMARY
+        page.window.bgcolor = Colors.BG_PRIMARY
         page.padding = Spacing.MD
 
         page.theme_mode = ft.ThemeMode.DARK
@@ -167,7 +168,7 @@ class OdusApp:
         if not self._is_expanded:
             self._terminal_container.visible = False
             self._page.window.width = Layout.MASCOT_WIDTH + 60
-            self._page.window.height = Layout.MASCOT_HEIGHT + 60
+            self._page.window.height = Layout.MASCOT_HEIGHT + 100
             self._page.update()
 
     def _show_modal(self) -> None:
