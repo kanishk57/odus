@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Callable
+from typing import Callable, Awaitable
 
 from pynput import keyboard
 
@@ -43,10 +43,32 @@ def _parse_hotkey(hotkey_str: str) -> str:
 class EvdevHotkeyListener:
     """Fallback hotkey listener using evdev (works on Wayland)."""
 
-    def __init__(self, on_trigger: Callable[[], None] | None):
-        self._on_trigger = on_trigger
+    def __init__(self, hotkey_str: str, on_trigger_async: Callable[[], Awaitable[None]] | None):
+        self._hotkey_str = hotkey_str
+        self._on_trigger_async = on_trigger_async
         self._device = self._find_keyboard()
         self._task = None
+        self._parse_evdev_hotkey(hotkey_str)
+
+    def _parse_evdev_hotkey(self, hotkey_str: str):
+        try:
+            from evdev import ecodes
+        except ImportError:
+            return
+
+        hotkey_lower = hotkey_str.lower()
+        self._req_ctrl = '<ctrl>' in hotkey_lower
+        self._req_shift = '<shift>' in hotkey_lower
+        self._req_alt = '<alt>' in hotkey_lower
+        self._req_super = '<super>' in hotkey_lower or '<cmd>' in hotkey_lower
+        
+        # extract the main key
+        parts = [p for p in hotkey_lower.split('+') if not p.startswith('<')]
+        main_key = parts[0] if parts else 'o'
+        
+        # map main key to evdev ecode
+        key_name = f"KEY_{main_key.upper()}"
+        self._main_keycode = getattr(ecodes, key_name, ecodes.KEY_O)
 
     def _find_keyboard(self):
         try:
@@ -68,6 +90,8 @@ class EvdevHotkeyListener:
         
         ctrl_pressed = False
         shift_pressed = False
+        alt_pressed = False
+        super_pressed = False
         
         try:
             async for event in self._device.async_read_loop():
@@ -79,12 +103,19 @@ class EvdevHotkeyListener:
                         ctrl_pressed = (key_event.keystate != key_event.key_up)
                     if key_event.scancode in [ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT]:
                         shift_pressed = (key_event.keystate != key_event.key_up)
+                    if key_event.scancode in [ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT]:
+                        alt_pressed = (key_event.keystate != key_event.key_up)
+                    if key_event.scancode in [ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA]:
+                        super_pressed = (key_event.keystate != key_event.key_up)
                     
-                    # Detect 'O' key press
-                    if key_event.scancode == ecodes.KEY_O and key_event.keystate == key_event.key_down:
-                        if ctrl_pressed and shift_pressed:
-                            if self._on_trigger:
-                                self._on_trigger()
+                    # Detect main key press
+                    if key_event.scancode == self._main_keycode and key_event.keystate == key_event.key_down:
+                        if (ctrl_pressed == self._req_ctrl and 
+                            shift_pressed == self._req_shift and
+                            alt_pressed == self._req_alt and
+                            super_pressed == self._req_super):
+                            if self._on_trigger_async:
+                                await self._on_trigger_async()
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -95,14 +126,23 @@ class EvdevHotkeyListener:
             loop = asyncio.get_running_loop()
             self._task = loop.create_task(self.listen())
             logger.info("EvdevHotkeyListener started")
-        except RuntimeError:
+        except RuntimeError as e:
             logger.error("EvdevHotkeyListener requires a running event loop")
+            raise e
 
     def stop(self):
         if self._task:
             self._task.cancel()
             self._task = None
-            logger.info("EvdevHotkeyListener stopped")
+            
+        if getattr(self, '_device', None):
+            try:
+                self._device.close()
+            except Exception as e:
+                logger.error("Error closing evdev device: %s", e)
+            self._device = None
+            
+        logger.info("EvdevHotkeyListener stopped")
 
 
 class HotkeyListener:
@@ -137,7 +177,7 @@ class HotkeyListener:
         logger.info("HotkeyListener configured | session=%s | hotkey=%s", self._session_type, self._hotkey_str)
 
     def _on_activate(self) -> None:
-        """Called when the hotkey is pressed."""
+        """Called when the hotkey is pressed (pynput path)."""
         logger.info("🔥 Hotkey activated!")
 
         # Push to the main asyncio loop safely from the thread
@@ -149,12 +189,22 @@ class HotkeyListener:
         if self._on_trigger:
             self._on_trigger()
 
+    async def _async_on_activate(self) -> None:
+        """Called when the hotkey is pressed via evdev on Wayland."""
+        logger.info("🔥 Hotkey activated (Wayland)!")
+        await self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED))
+        if self._on_trigger:
+            self._on_trigger()
+
     def start(self) -> None:
         """Start listening for the hotkey."""
         if self._session_type == "wayland":
             logger.info("Wayland detected — attempting to use EvdevHotkeyListener")
             try:
-                self._listener = EvdevHotkeyListener(on_trigger=self._on_activate)
+                self._listener = EvdevHotkeyListener(
+                    hotkey_str=self._hotkey_str,
+                    on_trigger_async=self._async_on_activate
+                )
                 self._listener.start()
                 return
             except Exception as e:
