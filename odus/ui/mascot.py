@@ -4,9 +4,9 @@ Mascot State Machine — controls the mascot's visual state and animations in Py
 
 import logging
 from enum import Enum
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QMenu
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QAction
 
 from odus.ui.theme import Colors, FontSizes, Radii
 
@@ -44,6 +44,8 @@ class MascotWindow(QWidget):
     """
     
     clicked = pyqtSignal()
+    exit_requested = pyqtSignal()
+    toggle_terminal_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -131,6 +133,41 @@ class MascotWindow(QWidget):
                 border-radius: {radius}px;
             }}
         """)
+
+    def contextMenuEvent(self, event):
+        """Show context menu for app management."""
+        menu = QMenu(self)
+        
+        # Styles for the menu (Obsidian Theme)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {Colors.BG_SECONDARY};
+                color: {Colors.TEXT_PRIMARY};
+                border: 1px solid {Colors.BORDER};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 20px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background-color: {Colors.ACCENT};
+                color: #000000;
+            }}
+        """)
+        
+        toggle_action = QAction("Toggle View", self)
+        toggle_action.triggered.connect(self.toggle_terminal_requested.emit)
+        
+        exit_action = QAction("Exit Odus", self)
+        exit_action.triggered.connect(self.exit_requested.emit)
+        
+        menu.addAction(toggle_action)
+        menu.addSeparator()
+        menu.addAction(exit_action)
+        
+        menu.exec(event.globalPos())
 
     def mousePressEvent(self, event):
         """Detect clicks to expand UI and initiate drag context."""

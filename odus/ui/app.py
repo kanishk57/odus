@@ -13,8 +13,9 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt, QObject
 
 from odus.events import EventType, OdusEvent, get_event_bus
-from odus.ui.ghost_terminal import GhostTerminal
+from odus.ui.chat_interface import ChatInterface
 from odus.ui.mascot import MascotWindow, MascotState
+from odus.ui.theme import Colors
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +46,18 @@ class OdusApp(QObject):
         self._mascot_win.move(screen.width() - 150, screen.height() - 200)
         
         # 2. Terminal Window (Isolated standard frameless window)
-        self._terminal = GhostTerminal()
+        self._terminal = ChatInterface()
         self._terminal.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-        self._terminal.resize(800, 600)
+        self._terminal.resize(450, 650)
         
-        # Hook our Ghost Terminal's clear button to just Hide the Window for UX
-        self._terminal.clear_btn.setText("Hide")
-        self._terminal.clear_btn.clicked.disconnect()
-        self._terminal.clear_btn.clicked.connect(self._terminal.hide)
+        # Mascot Actions
+        self._mascot_win.exit_requested.connect(self._app.quit)
+        self._mascot_win.toggle_terminal_requested.connect(self._toggle_terminal)
+        
+        # Chat Actions
+        # Connect input_submitted to the event bus for future AI interaction
+        self._terminal.input_submitted.connect(self._on_user_query)
+
 
     def start(self) -> None:
         """Launch the windows and hook into asyncio bus."""
@@ -69,6 +74,13 @@ class OdusApp(QObject):
     async def _on_mascot_clicked(self) -> None:
         """User clicked the Mascot, force a screen capture!"""
         await self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED))
+
+    @qasync.asyncSlot()
+    async def _on_user_query(self, query: str) -> None:
+        """User typed something in the chat pill."""
+        # For now, just pipe it to the bus
+        await self._bus.emit(OdusEvent(EventType.STATUS_UPDATE, {"message": f"User query: {query}"}))
+
 
     def _toggle_terminal(self) -> None:
         if self._terminal.isVisible():
@@ -100,44 +112,46 @@ class OdusApp(QObject):
     async def _handle_event(self, event: OdusEvent) -> None:
         if event.type == EventType.CAPTURE_STARTED:
             self._mascot_win.set_state(MascotState.THINKING)
-            self._terminal.add_info("📸 Capturing screen...")
+            self._terminal.add_system_log("📸 Capturing screen...")
 
         elif event.type == EventType.CAPTURE_DONE:
             size_kb = event.payload.get("size_bytes", 0) / 1024
-            self._terminal.add_success(
+            self._terminal.add_system_log(
                 f"Screen captured ({event.payload.get('width', '?')}x"
-                f"{event.payload.get('height', '?')}, {size_kb:.0f} KB)"
+                f"{event.payload.get('height', '?')}, {size_kb:.0f} KB)",
+                color=Colors.SUCCESS
             )
 
         elif event.type == EventType.ANALYSIS_STARTED:
-            self._terminal.add_info("🧠 Analyzing with Gemini Vision...")
+            self._terminal.add_system_log("🧠 Analyzing with Gemini Vision...")
+
 
         elif event.type == EventType.ANALYSIS_DONE:
             self._mascot_win.set_state(MascotState.SUCCESS)
             self._show_terminal()
             payload = event.payload
 
-            self._terminal.add_divider()
-            self._terminal.add_success(f"📋 {payload.get('summary', '')}")
-            self._terminal.add_info(payload.get("explanation", ""))
+            # Use AI Bubbles for the primary summary and explanation
+            self._terminal.add_ai_message(payload.get('summary', ''))
+            self._terminal.add_ai_message(payload.get("explanation", ""))
 
             if payload.get("warning"):
-                self._terminal.add_warning(payload["warning"])
+                self._terminal.add_system_log(payload["warning"], color=Colors.WARNING)
             if payload.get("follow_up"):
-                self._terminal.add_info(f"💡 {payload['follow_up']}")
+                self._terminal.add_system_log(f"💡 {payload['follow_up']}")
 
         elif event.type == EventType.CONFIRM_REQUIRED:
             self._mascot_win.set_state(MascotState.WARNING)
             self._show_terminal()
             payload = event.payload
 
-            self._terminal.add_divider()
-            self._terminal.add_warning(f"⚠️ {payload.get('summary', '')}")
-            self._terminal.add_info(payload.get("explanation", ""))
+            self._terminal.add_system_log(f"⚠️ {payload.get('summary', '')}", color=Colors.WARNING)
+            self._terminal.add_ai_message(payload.get("explanation", ""))
             
             command = payload.get("command", "")
-            self._terminal.add_command(command)
-            self._terminal.add_warning("This command needs your approval.")
+            self._terminal.add_system_log(f"$ {command}", color=Colors.ACCENT)
+            self._terminal.add_system_log("This command needs your approval.", color=Colors.WARNING)
+
 
             # Display a standard PyQt MessageBox
             msgBox = QMessageBox()
@@ -177,7 +191,7 @@ class OdusApp(QObject):
 
 
         elif event.type == EventType.EXECUTION_STARTED:
-            self._terminal.add_info("⚡ Executing command...")
+            self._terminal.add_system_log("⚡ Executing command...")
 
         elif event.type == EventType.EXECUTION_DONE:
             result = event.payload.get("result", {})
@@ -187,32 +201,33 @@ class OdusApp(QObject):
                 rc = result.get("return_code", -1)
                 if rc == 0:
                     self._mascot_win.set_state(MascotState.SUCCESS)
-                    self._terminal.add_success("Command executed successfully!")
+                    self._terminal.add_system_log("Command executed successfully!", color=Colors.SUCCESS)
                 else:
                     self._mascot_win.set_state(MascotState.ERROR)
-                    self._terminal.add_error(f"Command exited with code {rc}")
+                    self._terminal.add_system_log(f"Command exited with code {rc}", color=Colors.DANGER)
 
                 if result.get("stdout"):
-                    self._terminal.add_output(result["stdout"])
+                    self._terminal.add_system_log(result["stdout"], color=Colors.TEXT_SECONDARY)
                 if result.get("stderr"):
-                    self._terminal.add_error(result["stderr"])
+                    self._terminal.add_system_log(result["stderr"], color=Colors.DANGER)
 
             elif status == "blocked":
                 self._mascot_win.set_state(MascotState.ERROR)
-                self._terminal.add_error(
-                    f"🚫 {result.get('reason', 'Command was blocked.')}"
+                self._terminal.add_system_log(
+                    f"🚫 {result.get('reason', 'Command was blocked.')}",
+                    color=Colors.DANGER
                 )
-
-            self._terminal.add_divider()
 
         elif event.type == EventType.ERROR:
             self._mascot_win.set_state(MascotState.ERROR)
             self._show_terminal()
-            self._terminal.add_error(
-                f"Error: {event.payload.get('message', 'Unknown error')}"
+            self._terminal.add_system_log(
+                f"Error: {event.payload.get('message', 'Unknown error')}",
+                color=Colors.DANGER
             )
 
         elif event.type == EventType.STATUS_UPDATE:
-            self._terminal.add_info(
+            self._terminal.add_system_log(
                 event.payload.get("message", "")
             )
+

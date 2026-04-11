@@ -13,35 +13,35 @@ from __future__ import annotations
 # ── Colors ─────────────────────────────────────────────────────────────
 
 class Colors:
-    """Odus color palette — dark mode first."""
+    """Odus color palette — Obsidian Design System."""
 
-    BG_PRIMARY = "#0f1117"           # Deep dark background
-    BG_SECONDARY = "#1a1d27"         # Card / panel backgrounds
-    BG_ELEVATED = "#22252f"          # Elevated surfaces (dialogs, tooltips)
-    BG_GLASS = "rgba(255,255,255,0.05)"
+    BG_PRIMARY = "#0c0e14"           # Deep dark background (Obsidian)
+    BG_SECONDARY = "#11131a"         # Card / panel backgrounds
+    BG_ELEVATED = "#171921"          # Elevated surfaces
+    BG_GLASS = "rgba(12, 14, 20, 0.3)" # Glass background with obsidian tint
 
-    ACCENT = "#6c63ff"               # Primary purple
-    ACCENT_HOVER = "#7b73ff"
-    ACCENT_MUTED = "#4a4494"
+    ACCENT = "#ba9eff"               # Vibrant Purple
+    ACCENT_HOVER = "#c5aeff"
+    ACCENT_MUTED = "#8455ef"
 
-    SUCCESS = "#22c55e"              # Green — safe / success / tier 1
-    WARNING = "#eab308"              # Yellow — caution / tier 2
-    DANGER = "#ef4444"               # Red — danger / tier 3 / error
+    SUCCESS = "#22c55e"              # Green
+    WARNING = "#ffb2b9"              # Softened warning / secondary error
+    DANGER = "#ff6e84"               # Bright Error / Danger
 
-    TEXT_PRIMARY = "#e4e4e7"         # Light text on dark bg
-    TEXT_SECONDARY = "#a1a1aa"       # Muted text
-    TEXT_ACCENT = "#c4c0ff"          # Accent-tinted text
+    TEXT_PRIMARY = "#e5e4ed"         # Light text (Obsidian contrast)
+    TEXT_SECONDARY = "#aaaab3"       # Muted text
+    TEXT_ACCENT = "#ba9eff"          # Accent-tinted text
 
-    BORDER = "rgba(255,255,255,0.08)"
-    BORDER_ACTIVE = "rgba(108,99,255,0.4)"
+    BORDER = "rgba(116, 117, 125, 0.2)" # Ghost Border
+    BORDER_ACTIVE = "rgba(186, 158, 255, 0.4)"
 
     # Terminal-specific
-    TERMINAL_BG = "#0a0c10"
-    TERMINAL_TEXT = "#c9d1d9"
-    TERMINAL_GREEN = "#3fb950"
-    TERMINAL_RED = "#f85149"
-    TERMINAL_YELLOW = "#d29922"
-    TERMINAL_BLUE = "#58a6ff"
+    TERMINAL_BG = "#0c0e14"
+    TERMINAL_TEXT = "#e5e4ed"
+    TERMINAL_GREEN = "#22c55e"
+    TERMINAL_RED = "#ff6e84"
+    TERMINAL_YELLOW = "#f67ca3"
+    TERMINAL_BLUE = "#ba9eff"
 
 
 # ── Typography ─────────────────────────────────────────────────────────
