@@ -12,7 +12,6 @@ import logging
 import os
 import pty
 import signal
-import subprocess
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
@@ -20,14 +19,6 @@ from odus.action.safety import SafetyGate, SafetyVerdict
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class PtyCommandResult:
-    """Final result after a PTY command completes."""
-    command: str
-    exit_code: int
-    output: str          # Full captured output
-    timed_out: bool
 
 
 class PtySession:
@@ -174,33 +165,6 @@ class PtySession:
             except OSError:
                 pass
 
-    async def change_directory(self, path: str) -> bool:
-        """
-        Change the session's working directory.
-
-        Returns True if the directory exists and was changed.
-        """
-        # Resolve relative to current cwd
-        if not os.path.isabs(path):
-            resolved = os.path.normpath(os.path.join(self._cwd, path))
-        else:
-            resolved = os.path.normpath(path)
-
-        if os.path.isdir(resolved):
-            self._cwd = resolved
-            logger.info("📁 Changed directory: %s", resolved)
-            return True
-        else:
-            logger.warning("📁 Directory not found: %s", path)
-            return False
-
-    async def send_input(self, text: str) -> None:
-        """
-        Send text to stdin of a running command.
-        (For future interactive command support.)
-        """
-        # This would need a persistent process — placeholder for now
-        logger.info("PTY stdin: %s", text[:60])
 
     async def _update_cwd(self) -> None:
         """Try to detect cwd changes by running pwd."""

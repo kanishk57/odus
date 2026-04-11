@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from odus.perception.capture import ScreenCapture, CaptureResult
+from odus.perception.capture import ScreenCapture
 
 
 class TestScreenCaptureBackendSelection:
@@ -23,9 +23,9 @@ class TestScreenCaptureBackendSelection:
 
     @patch.dict("os.environ", {"XDG_SESSION_TYPE": "wayland"})
     @patch("shutil.which", return_value=None)
-    def test_wayland_no_tools_falls_back_to_x11(self, mock_which):
+    def test_wayland_no_tools_falls_back_to_portal(self, mock_which):
         cap = ScreenCapture()
-        assert cap._backend.__name__ == "_capture_x11"
+        assert cap._backend.__name__ == "_capture_portal_fallback"
 
     @patch.dict("os.environ", {}, clear=True)
     def test_no_env_defaults_to_x11(self):
@@ -40,17 +40,16 @@ class TestCompression:
         """Create a noisy PNG (simulating a real screenshot) and verify JPEG compression shrinks it."""
         from PIL import Image
         import io
-        import numpy as np
+        import os
 
         # Create a 1920x1080 random noise image (realistic screenshot-like data)
-        rng = np.random.default_rng(42)
-        data = rng.integers(0, 255, (1080, 1920, 3), dtype=np.uint8)
-        img = Image.fromarray(data, "RGB")
+        data = os.urandom(1920 * 1080 * 3)
+        img = Image.frombytes("RGB", (1920, 1080), data)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         png_bytes = buf.getvalue()
 
-        compressed = ScreenCapture.compress(png_bytes, max_width=1280, jpeg_quality=75)
+        compressed, new_w, new_h = ScreenCapture.compress(png_bytes, max_width=1280, jpeg_quality=75)
 
         assert len(compressed) < len(png_bytes)
         # Verify it's a valid JPEG
@@ -68,6 +67,6 @@ class TestCompression:
         img.save(buf, format="PNG")
         png_bytes = buf.getvalue()
 
-        compressed = ScreenCapture.compress(png_bytes, max_width=1280)
+        compressed, new_w, new_h = ScreenCapture.compress(png_bytes, max_width=1280)
         result_img = Image.open(io.BytesIO(compressed))
         assert result_img.width == 800  # Should NOT upscale

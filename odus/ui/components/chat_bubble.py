@@ -73,10 +73,10 @@ class MessageBubble(QFrame):
             self._layout.setAlignment(Qt.AlignmentFlag.AlignRight)
 
             self.setObjectName("UserBubble")
-            self.setStyleSheet(f"""
-                QFrame#UserBubble {{
+            self.setStyleSheet("""
+                QFrame#UserBubble {
                     background-color: transparent;
-                }}
+                }
             """)
 
         # Entrance animation

@@ -10,10 +10,10 @@ import os
 from enum import Enum
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer, QEasingCurve, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QSize
 from PyQt6.QtGui import QColor, QPixmap
 
-from odus.ui.theme import Colors, Radii, Animations, Layout
+from odus.ui.theme import Colors, Animations, Layout
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,6 @@ class MascotWidget(QWidget):
 
     def set_state(self, state: MascotState) -> None:
         """Update mascot appearance with smooth transitions."""
-        prev_state = self._state
         self._state = state
 
         # Load new mascot image

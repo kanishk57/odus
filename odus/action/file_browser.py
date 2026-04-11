@@ -11,7 +11,6 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -25,16 +24,6 @@ class FileEntry:
     size: int = 0
     extension: str = ""
 
-
-@dataclass
-class GitStatus:
-    """Git repository status summary."""
-    branch: str = ""
-    clean: bool = True
-    modified: list[str] = field(default_factory=list)
-    untracked: list[str] = field(default_factory=list)
-    ahead: int = 0
-    behind: int = 0
 
 
 # Paths that are NEVER accessible
@@ -117,11 +106,6 @@ class FileBrowser:
         logger.info("✅ Access granted: %s", abs_path)
         return True
 
-    def revoke_access(self, path: str) -> None:
-        """Revoke access to a directory."""
-        abs_path = self._resolve(path)
-        self._allowed_dirs.discard(abs_path)
-
     def needs_permission(self, path: str) -> bool:
         """Check if a path needs explicit permission (not already allowed, not blocked)."""
         abs_path = self._resolve(path)
@@ -198,51 +182,6 @@ class FileBrowser:
                 lines.append(line.rstrip("\n"))
 
         return "\n".join(lines)
-
-    async def get_git_status(self, repo_path: str = ".") -> GitStatus:
-        """
-        Get git status of a repository.
-
-        Raises:
-            PermissionError: If the repo path is not accessible.
-        """
-        abs_path = self._resolve(repo_path)
-
-        if not self.is_allowed(abs_path):
-            raise PermissionError(f"Access not granted: {abs_path}")
-
-        status = GitStatus()
-
-        try:
-            # Branch
-            result = subprocess.run(
-                ["git", "branch", "--show-current"],
-                cwd=abs_path, capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                status.branch = result.stdout.strip()
-
-            # Status
-            result = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=abs_path, capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if not line:
-                        continue
-                    marker = line[:2]
-                    filename = line[3:]
-                    if "?" in marker:
-                        status.untracked.append(filename)
-                    else:
-                        status.modified.append(filename)
-                status.clean = not status.modified and not status.untracked
-
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-
-        return status
 
     # ── Helpers ─────────────────────────────────────────────────────────
 

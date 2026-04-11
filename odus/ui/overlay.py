@@ -8,7 +8,7 @@ the agent clicks, types, or interacts with a GUI element.
 
 import logging
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt, QTimer, QRect, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QTimer, QRect
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont
 
 from odus.ui.theme import Colors, Fonts, FontSizes

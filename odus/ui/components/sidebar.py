@@ -5,7 +5,7 @@ Mascot Sidebar — Avatar, status badges, and quick actions.
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame,
+    QVBoxLayout, QPushButton, QLabel, QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont

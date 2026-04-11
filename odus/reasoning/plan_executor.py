@@ -19,7 +19,6 @@ from odus.reasoning.tools import (
     tool_press_key,
     tool_scroll_screen,
     tool_highlight_area,
-    get_browser,
 )
 from odus.reasoning.vision import AnalysisResult
 

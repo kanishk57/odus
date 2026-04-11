@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import AsyncGenerator
 
 from odus.action.pty_session import PtySession
-from odus.action.file_browser import FileBrowser, FileEntry
+from odus.action.file_browser import FileBrowser
 from odus.action.safety import SafetyGate, SafetyVerdict
 from odus.action.input_sim import get_input_simulator, InputActionResult
 from odus.events import OdusEvent, EventType, get_event_bus
@@ -324,12 +323,12 @@ def tool_suggest_fix(
     return {
         "status": "needs_confirmation",
         "action_type": "type_text",
-        "text": command + "\n",
+        "text": command,
         "x": x,
         "y": y,
         "target_description": "active terminal",
         "safety_tier": safety_tier,
-        "explanation": explanation,
+        "explanation": explanation + " (Please review and press Enter yourself)",
         "risk_warning": risk_warning,
     }
 

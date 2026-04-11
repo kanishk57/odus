@@ -42,6 +42,11 @@ class YdotoolBackend:
         self._use_numeric_buttons = False
         self._supports_absolute = True
         self._health_error: str | None = None
+
+        # Point ydotool to the socket path used by the Odus systemd service
+        import os
+        os.environ["YDOTOOL_SOCKET"] = "/tmp/ydotoolsok"
+
         self._health_check_task = asyncio.create_task(self._check_health())
 
     @property
@@ -144,10 +149,30 @@ class YdotoolBackend:
         self._ensure_healthy()
         if x is not None and y is not None:
             await self.move_mouse(x, y)
-            await asyncio.sleep(0.1) # Wait for focus to shift
-        
-        # ydotool type can be sensitive to specials; we wrap it carefully
-        await run_cmd(["ydotool", "type", "--key-delay", str(int(interval * 1000)), text])
+            await asyncio.sleep(0.1)  # Wait for focus to shift
+
+        # Pipe text via stdin (--file -) so that:
+        # 1. Escape mode is disabled by default — shell special chars (-, *, /, etc.) are typed literally
+        # 2. Unicode / multi-byte characters are handled correctly
+        # 3. Avoids shell argument length limits for large text blocks
+        key_delay_ms = max(1, int(interval * 1000))
+        proc = await asyncio.create_subprocess_exec(
+            "ydotool", "type", "--key-delay", str(key_delay_ms), "--file", "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(input=text.encode("utf-8")),
+                timeout=max(10, len(text) * (key_delay_ms / 500)),
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise RuntimeError("ydotool type timed out")
+        if proc.returncode != 0:
+            err = stderr.decode().strip() if stderr else "unknown error"
+            raise RuntimeError(f"ydotool type failed: {err}")
 
     async def press_key(self, key: str, x: int | None = None, y: int | None = None) -> None:
         self._ensure_healthy()

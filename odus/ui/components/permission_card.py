@@ -153,8 +153,8 @@ class PermissionCard(QFrame):
 
     def _on_allow(self):
         self.setEnabled(False)
-        self.setStyleSheet(self.styleSheet() + f"""
-            QFrame#PermissionCard {{ opacity: 0.6; }}
+        self.setStyleSheet(self.styleSheet() + """
+            QFrame#PermissionCard { opacity: 0.6; }
         """)
         self.allowed.emit(self._action_data)
 

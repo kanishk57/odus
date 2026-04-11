@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import pytest
 
-from odus.reasoning.vision import VisionAnalyzer, AnalysisResult, SuggestedCommand
+from odus.reasoning.vision import VisionAnalyzer
 
 
 class TestResponseParsing:

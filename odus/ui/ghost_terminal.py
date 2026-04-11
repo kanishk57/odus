@@ -11,9 +11,9 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit, QLabel, QFrame
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QColor, QTextCursor
+from PyQt6.QtGui import QFont, QTextCursor
 
-from odus.ui.theme import Colors, FontSizes, Fonts, Radii, Spacing
+from odus.ui.theme import Colors, FontSizes, Fonts, Radii
 
 logger = logging.getLogger(__name__)
 
@@ -217,17 +217,11 @@ class GhostTerminal(QWidget):
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
-    def add_info(self, text: str) -> None:
-        self._add_entry(text, Colors.TERMINAL_TEXT, "›")
-
     def add_success(self, text: str) -> None:
         self._add_entry(text, Colors.TERMINAL_GREEN, "✓")
 
     def add_error(self, text: str) -> None:
         self._add_entry(text, Colors.TERMINAL_RED, "✗")
-
-    def add_warning(self, text: str) -> None:
-        self._add_entry(text, Colors.TERMINAL_YELLOW, "⚠")
 
     def add_command(self, command: str) -> None:
         self._add_entry(f"$ {command}", Colors.TERMINAL_BLUE, "▶", bold=True)

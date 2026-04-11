@@ -12,7 +12,6 @@ import os
 import shutil
 import time
 from enum import Enum
-from typing import Sequence
 
 from odus.action.input.base import (
     InputActionType, InputActionResult, InputBackend,
@@ -37,6 +36,7 @@ class InputSimulator:
     def __init__(self) -> None:
         self._session_type = os.environ.get("XDG_SESSION_TYPE", "x11").lower()
         self._focus_mode = self._get_focus_mode()
+        self._scale_factor = self._get_wayland_scale()
         self._mouse_backend_type = self._select_mouse_backend()
         self._keyboard_backend_type = self._select_keyboard_backend()
         
@@ -50,6 +50,25 @@ class InputSimulator:
             self._mouse_backend_type.value,
             self._keyboard_backend_type.value,
         )
+
+    def _get_wayland_scale(self) -> float:
+        if self._session_type != "wayland":
+            return 1.0
+        try:
+            import subprocess
+            import re
+            out = subprocess.check_output([
+                "gdbus", "call", "--session", 
+                "--dest", "org.gnome.Mutter.DisplayConfig", 
+                "--object-path", "/org/gnome/Mutter/DisplayConfig", 
+                "--method", "org.gnome.Mutter.DisplayConfig.GetCurrentState"
+            ], text=True, stderr=subprocess.DEV_NULL)
+            m = re.search(r'\[\(\d+,\s*\d+,\s*([\d\.]+),', out)
+            if m:
+                return float(m.group(1))
+        except Exception:
+            pass
+        return 1.0
 
     def _get_focus_mode(self) -> str:
         """Detect system focus mode (e.g., GNOME sloppy focus)."""
@@ -86,11 +105,12 @@ class InputSimulator:
         try:
             import pyautogui # noqa
             return True
-        except ImportError:
+        except Exception:
             return False
 
     async def move_mouse(self, x: int, y: int) -> InputActionResult:
         t0 = time.monotonic()
+        x, y = int(x / self._scale_factor), int(y / self._scale_factor)
         try:
             if not self._mouse_impl: raise RuntimeError("No mouse backend")
             await self._mouse_impl.move_mouse(x, y)
@@ -100,6 +120,7 @@ class InputSimulator:
 
     async def click(self, x: int, y: int, button: str = "left") -> InputActionResult:
         t0 = time.monotonic()
+        x, y = int(x / self._scale_factor), int(y / self._scale_factor)
         try:
             if not self._mouse_impl: raise RuntimeError("No mouse backend")
             
@@ -114,6 +135,7 @@ class InputSimulator:
 
     async def double_click(self, x: int, y: int) -> InputActionResult:
         t0 = time.monotonic()
+        x, y = int(x / self._scale_factor), int(y / self._scale_factor)
         try:
             if not self._mouse_impl: raise RuntimeError("No mouse backend")
             
@@ -140,6 +162,8 @@ class InputSimulator:
 
     async def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5) -> InputActionResult:
         t0 = time.monotonic()
+        x1, y1 = int(x1 / self._scale_factor), int(y1 / self._scale_factor)
+        x2, y2 = int(x2 / self._scale_factor), int(y2 / self._scale_factor)
         try:
             if not self._mouse_impl: raise RuntimeError("No mouse backend")
             await self._mouse_impl.drag(x1, y1, x2, y2, duration)
@@ -173,6 +197,8 @@ class InputSimulator:
 
     async def type_text(self, text: str, interval: float = 0.1, x: int | None = None, y: int | None = None) -> InputActionResult:
         t0 = time.monotonic()
+        if x is not None: x = int(x / self._scale_factor)
+        if y is not None: y = int(y / self._scale_factor)
         try:
             if not self._keyboard_impl: raise RuntimeError("No keyboard backend")
             
@@ -181,12 +207,14 @@ class InputSimulator:
                 await self._ensure_focus(x, y)
                 
             await self._keyboard_impl.type_text(text[:500], interval, x=x, y=y)
-            return InputActionResult(InputActionType.KEY_TYPE, True, f"Typed text", duration_ms=(time.monotonic()-t0)*1000)
+            return InputActionResult(InputActionType.KEY_TYPE, True, "Typed text", duration_ms=(time.monotonic()-t0)*1000)
         except Exception as e:
             return InputActionResult(InputActionType.KEY_TYPE, False, "Type failed", error=str(e), duration_ms=(time.monotonic()-t0)*1000)
 
     async def press_key(self, key: str, x: int | None = None, y: int | None = None) -> InputActionResult:
         t0 = time.monotonic()
+        if x is not None: x = int(x / self._scale_factor)
+        if y is not None: y = int(y / self._scale_factor)
         try:
             if not self._keyboard_impl: raise RuntimeError("No keyboard backend")
             
@@ -201,6 +229,8 @@ class InputSimulator:
 
     async def hotkey(self, *keys: str, x: int | None = None, y: int | None = None) -> InputActionResult:
         t0 = time.monotonic()
+        if x is not None: x = int(x / self._scale_factor)
+        if y is not None: y = int(y / self._scale_factor)
         try:
             if not self._keyboard_impl: raise RuntimeError("No keyboard backend")
             
