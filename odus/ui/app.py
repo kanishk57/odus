@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import qasync
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt
@@ -31,7 +32,12 @@ class OdusApp:
             
         # 1. Mascot Window (Floats, totally transparent EGL border)
         self._mascot_win = MascotWindow()
-        self._mascot_win.clicked.connect(self._toggle_terminal)
+        self._mascot_win.clicked.connect(self._on_mascot_clicked)
+        
+        # In PyQt on Wayland, sometimes Tool hint masks StaysOnTop.
+        # We enforce strict StaysOnTop explicitly.
+        self._mascot_win.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self._mascot_win.setWindowFlag(Qt.WindowType.X11BypassWindowManagerHint, True) # Helps bypass strict WM layering
         
         # Force bottom-right starting position
         screen = self._app.primaryScreen().geometry()
@@ -57,6 +63,10 @@ class OdusApp:
         self._terminal.add_divider()
         
         asyncio.create_task(self._event_loop())
+
+    def _on_mascot_clicked(self) -> None:
+        """User clicked the Mascot, force a screen capture!"""
+        asyncio.create_task(self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED)))
 
     def _toggle_terminal(self) -> None:
         if self._terminal.isVisible():
