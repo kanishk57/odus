@@ -43,6 +43,7 @@ class ActionOverlay(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowTransparentForInput
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -55,6 +56,8 @@ class ActionOverlay(QWidget):
         # Highlight state
         self._highlight_rect: QRect | None = None
         self._crosshair_pos: tuple[int, int] | None = None
+        self._ghost_cursor_pos: tuple[int, int] | None = None
+        self._is_typing: bool = False
         self._label_text: str = ""
         self._pulse_alpha: int = 180
         self._pulse_increasing: bool = False
@@ -119,12 +122,26 @@ class ActionOverlay(QWidget):
         """
         Show a crosshair + pulse at a specific point (for click targets).
         """
+        self._ghost_cursor_pos = (x, y)
         # Create a small highlight rect around the crosshair point
         self.show_highlight(
             x=x - 20, y=y - 20, w=40, h=40,
             label=label, duration_ms=duration_ms,
         )
         self._crosshair_pos = (x, y)
+        self.update()
+
+    def set_ghost_cursor(self, x: int | None, y: int | None, is_typing: bool = False) -> None:
+        """Update the position of the software-rendered ghost cursor."""
+        if x is None or y is None:
+            self._ghost_cursor_pos = None
+        else:
+            self._ghost_cursor_pos = (x, y)
+        self._is_typing = is_typing
+        
+        if self._ghost_cursor_pos:
+            self.show()
+            self.raise_()
         self.update()
 
     def dismiss(self) -> None:
@@ -148,10 +165,38 @@ class ActionOverlay(QWidget):
         if self._crosshair_pos:
             self._draw_crosshair(painter)
 
+        if self._ghost_cursor_pos:
+            self._draw_ghost_cursor(painter)
+
         if self._label_text and self._highlight_rect:
             self._draw_label(painter)
 
         painter.end()
+
+    def _draw_ghost_cursor(self, painter: QPainter) -> None:
+        """Draw a stylized software cursor representing Odus's focus."""
+        if not self._ghost_cursor_pos:
+            return
+
+        x, y = self._ghost_cursor_pos
+        accent = QColor(Colors.ACCENT)
+        
+        # Outer glow ring
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(accent.red(), accent.green(), accent.blue(), 60)))
+        painter.drawEllipse(x - 12, y - 12, 24, 24)
+        
+        # Inner dot
+        painter.setBrush(QBrush(accent))
+        painter.drawEllipse(x - 4, y - 4, 8, 8)
+        
+        # Typing indicator
+        if self._is_typing:
+            font = QFont(Fonts.MONO, FontSizes.XS, QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.setPen(QColor(Colors.TEXT_PRIMARY))
+            # Floating "..." or "⌨"
+            painter.drawText(x + 12, y - 12, "⌨ TYPING...")
 
     def _draw_highlight(self, painter: QPainter) -> None:
         """Draw a pulsing glowing rectangle."""

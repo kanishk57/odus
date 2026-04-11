@@ -77,6 +77,8 @@ class VisionAnalyzer:
         image_bytes: bytes,
         user_context: str = "",
         use_deep_model: bool = False,
+        image_width: int | None = None,
+        image_height: int | None = None,
     ) -> AnalysisResult:
         """
         Analyze a screenshot with Gemini Vision.
@@ -85,6 +87,7 @@ class VisionAnalyzer:
             image_bytes: JPEG-compressed screenshot bytes.
             user_context: Optional user-provided context about the issue.
             use_deep_model: If True, use gemini-2.5-pro instead of flash.
+            image_width, image_height: Resolution of the image being sent.
 
         Returns:
             AnalysisResult with structured findings.
@@ -94,6 +97,10 @@ class VisionAnalyzer:
 
         # Build the content parts
         prompt_text = SYSTEM_PROMPT
+        
+        if image_width and image_height:
+            prompt_text += f"\n\n## Screenshot Resolution\nResolution: {image_width}x{image_height}"
+            
         if user_context:
             prompt_text += f"\n\n## User Context\n{user_context}"
         prompt_text += (

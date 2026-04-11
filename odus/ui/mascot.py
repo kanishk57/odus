@@ -101,9 +101,13 @@ class MascotWidget(QWidget):
         self.pulse_anim.setLoopCount(-1)
 
         # ── Bounce animation (SUCCESS) ──
-        # We animate maximumSize to create a scale effect
-        self._bounce_timer = QTimer(self)
-        self._bounce_timer.setSingleShot(True)
+        self.bounce_anim = QPropertyAnimation(self.container, b"minimumSize")
+        self.bounce_anim.setDuration(Animations.FAST)
+        self.bounce_anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        
+        self.bounce_anim_back = QPropertyAnimation(self.container, b"minimumSize")
+        self.bounce_anim_back.setDuration(Animations.NORMAL)
+        self.bounce_anim_back.setEasingCurve(QEasingCurve.Type.InOutCubic)
 
         # ── Drop shadow for glow ──
         self.glow = QGraphicsDropShadowEffect()
@@ -168,33 +172,25 @@ class MascotWidget(QWidget):
             self.glow.setBlurRadius(15)
 
     def _do_bounce(self) -> None:
-        """Quick scale bounce animation for success state."""
+        """Quick scale bounce animation for success state using QPropertyAnimation."""
         original_size = Layout.MASCOT_SIZE
-        big_size = int(original_size * 1.12)
-
+        big_size = int(original_size * 1.15)
+        
         # Grow
-        self.container.setFixedSize(big_size, big_size)
-        self.container.setStyleSheet(
-            self.container.styleSheet().replace(
-                f"border-radius: {original_size // 2}px",
-                f"border-radius: {big_size // 2}px"
-            )
-        )
-
-        # Shrink back after delay
-        def shrink():
-            self.container.setFixedSize(original_size, original_size)
-            ring_color = MASCOT_RING_COLORS.get(self._state, Colors.TEXT_DIM)
-            self.container.setStyleSheet(f"""
-                QWidget#MascotRing {{
-                    background-color: {Colors.BG_SECONDARY};
-                    border: 2px solid {ring_color};
-                    border-radius: {original_size // 2}px;
-                }}
-            """)
-
-        self._bounce_timer.timeout.connect(shrink)
-        self._bounce_timer.start(Animations.BOUNCE)
+        self.bounce_anim.setStartValue(QSize(original_size, original_size))
+        self.bounce_anim.setEndValue(QSize(big_size, big_size))
+        
+        # Shrink
+        self.bounce_anim_back.setStartValue(QSize(big_size, big_size))
+        self.bounce_anim_back.setEndValue(QSize(original_size, original_size))
+        
+        try:
+            self.bounce_anim.finished.disconnect(self.bounce_anim_back.start)
+        except TypeError:
+            pass
+        
+        self.bounce_anim.finished.connect(self.bounce_anim_back.start)
+        self.bounce_anim.start()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

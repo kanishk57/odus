@@ -53,12 +53,20 @@ list them clearly. Each step should be a single action (one click, one \
 command, one keystroke). Wait for verification before continuing.
 4. **Explain like a teacher.** The user is learning. After the fix, \
 briefly teach them why it works.
-5. **Prefer highlighting first.** Before clicking or typing, use \
+5. **Prefer agentic typing.** For commands that require `sudo`, \
+interactive input, or when you want the user to see the command being \
+typed in their terminal, use `suggest_fix` (which includes coordinates) \
+instead of `run_command`. `run_command` is for background tasks.
+6. **Prefer highlighting first.** Before clicking or typing, use \
 `highlight_area` to show the user WHERE you intend to act, so they \
 can follow along.
-6. **Describe targets clearly.** When using desktop control tools, \
+7. **Describe targets clearly.** When using desktop control tools, \
 always include a clear `target_description` (e.g., "Save button in \
-the top-right corner of the Preferences window").
+the top-right corner of the Preferences window"). For `type_text` and \
+`press_key`, you MUST include the `x` and `y` coordinates of the \
+target window or input field to ensure focus is correctly established \
+in hover-based focus environments. Coordinates must be absolute pixel \
+values based on the provided Screenshot Resolution.
 
 ## Safety Tiers
 For EVERY action you suggest, classify it into one of these tiers:
@@ -208,8 +216,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "suggest_fix",
         "description": (
-            "Suggest a fix to the user without auto-executing it. "
-            "Use this for tier_2 commands that need user confirmation."
+            "Suggest a fix that you will type into the user's terminal. "
+            "IMPORTANT: You MUST provide 'x' and 'y' coordinates of the terminal "
+            "window/input area so you can focus it before typing."
         ),
         "parameters": {
             "type": "object",
@@ -217,6 +226,14 @@ TOOL_DECLARATIONS = [
                 "command": {
                     "type": "string",
                     "description": "The suggested command.",
+                },
+                "x": {
+                    "type": "integer",
+                    "description": "X coordinate of the terminal input area.",
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Y coordinate of the terminal input area.",
                 },
                 "safety_tier": {
                     "type": "integer",
@@ -231,7 +248,7 @@ TOOL_DECLARATIONS = [
                     "description": "What could go wrong if this command fails.",
                 },
             },
-            "required": ["command", "safety_tier", "explanation"],
+            "required": ["command", "x", "y", "safety_tier", "explanation"],
         },
     },
 
@@ -287,9 +304,9 @@ TOOL_DECLARATIONS = [
     {
         "name": "type_text",
         "description": (
-            "Type a string of text into the currently focused GUI element. "
-            "Make sure the correct element is focused (via a prior click) "
-            "before calling this."
+            "Type a string of text into a GUI element. "
+            "IMPORTANT: Always provide 'x' and 'y' coordinates of the target element "
+            "to ensure focus, especially in hover-based focus environments."
         ),
         "parameters": {
             "type": "object",
@@ -297,6 +314,14 @@ TOOL_DECLARATIONS = [
                 "text": {
                     "type": "string",
                     "description": "The text to type.",
+                },
+                "x": {
+                    "type": "integer",
+                    "description": "X coordinate of the target text field.",
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Y coordinate of the target text field.",
                 },
                 "target_description": {
                     "type": "string",
@@ -315,15 +340,15 @@ TOOL_DECLARATIONS = [
                     "description": "Why this typing action is needed.",
                 },
             },
-            "required": ["text", "target_description", "safety_tier", "explanation"],
+            "required": ["text", "x", "y", "target_description", "safety_tier", "explanation"],
         },
     },
     {
         "name": "press_key",
         "description": (
             "Press a keyboard key or key combination. "
-            "Use for shortcuts (Ctrl+S, Ctrl+C), navigation (Tab, Enter, Escape), "
-            "or special keys (F5, Delete, Home)."
+            "IMPORTANT: Always provide 'x' and 'y' coordinates of the target window/element "
+            "to ensure focus, especially in hover-based focus environments."
         ),
         "parameters": {
             "type": "object",
@@ -335,6 +360,14 @@ TOOL_DECLARATIONS = [
                         "List of keys to press simultaneously. "
                         "E.g., ['ctrl', 's'] for Ctrl+S, or ['enter'] for Enter."
                     ),
+                },
+                "x": {
+                    "type": "integer",
+                    "description": "X coordinate of the target window/element.",
+                },
+                "y": {
+                    "type": "integer",
+                    "description": "Y coordinate of the target window/element.",
                 },
                 "target_description": {
                     "type": "string",
@@ -350,7 +383,7 @@ TOOL_DECLARATIONS = [
                     "description": "Why this key press is needed.",
                 },
             },
-            "required": ["keys", "target_description", "safety_tier", "explanation"],
+            "required": ["keys", "x", "y", "target_description", "safety_tier", "explanation"],
         },
     },
     {

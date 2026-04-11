@@ -44,6 +44,7 @@ class EventType(Enum):
 
     # Multi-step agent plan events
     AGENT_PLAN_CREATED = "agent_plan_created"           # Agent produced a multi-step plan
+    AGENT_PLAN_CONFIRMED = "agent_plan_confirmed"       # User approved the entire plan
     AGENT_STEP_STARTED = "agent_step_started"           # Starting a plan step
     AGENT_STEP_DONE = "agent_step_done"                 # Step completed successfully
     AGENT_PLAN_DONE = "agent_plan_done"                 # All plan steps finished

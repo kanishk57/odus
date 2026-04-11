@@ -97,6 +97,11 @@ class GhostTerminal(QWidget):
         self.setObjectName("GhostTerminal")
         self.setProperty("tab_name", "terminal")
         self._line_count = 0
+        
+        self._html_buffer = []
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(50)  # Flush every 50ms
+        self._flush_timer.timeout.connect(self._flush_buffer)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -116,7 +121,8 @@ class GhostTerminal(QWidget):
         self.cwd_label = QLabel("~")
         self.cwd_label.setFont(QFont(Fonts.MONO, FontSizes.XS))
         self.cwd_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-        cwd_layout.addWidget(self.cwd_label)
+        self.cwd_label.setWordWrap(True)
+        cwd_layout.addWidget(self.cwd_label, stretch=1)
 
         cwd_layout.addStretch()
 
@@ -189,15 +195,27 @@ class GhostTerminal(QWidget):
             path = "~" + path[len(home):]
         self.cwd_label.setText(path)
 
+    def _flush_buffer(self) -> None:
+        """Flush accumulated HTML lines to the UI."""
+        if not self._html_buffer:
+            return
+            
+        combined_html = "<br>".join(self._html_buffer)
+        self.output.append(combined_html)
+        self._html_buffer.clear()
+        self._enforce_scrollback()
+        self._scroll_to_bottom()
+
     def add_stream_line(self, text: str) -> None:
         """
         Append a single line of streaming output.
-        Supports ANSI escape codes.
+        Supports ANSI escape codes. Buffers internally to prevent UI freezing.
         """
         html_line = _ansi_to_html(text.rstrip("\n\r"))
-        self.output.append(f"<span style='white-space: pre-wrap; font-family: {Fonts.MONO};'>{html_line}</span>")
-        self._enforce_scrollback()
-        self._scroll_to_bottom()
+        self._html_buffer.append(f"<span style='white-space: pre-wrap; font-family: {Fonts.MONO};'>{html_line}</span>")
+        
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
 
     def add_info(self, text: str) -> None:
         self._add_entry(text, Colors.TERMINAL_TEXT, "›")

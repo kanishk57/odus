@@ -14,6 +14,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import os
+
+os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3"
+os.environ["GTK_THEME"] = "Adwaita:dark"
 
 from dotenv import load_dotenv
 

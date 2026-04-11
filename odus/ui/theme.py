@@ -199,8 +199,8 @@ class Layout:
     """Layout constants for the unified window."""
 
     # Unified window
-    WINDOW_MIN_WIDTH = 800
-    WINDOW_MIN_HEIGHT = 550
+    WINDOW_MIN_WIDTH = 400
+    WINDOW_MIN_HEIGHT = 400
     WINDOW_DEFAULT_WIDTH = 900
     WINDOW_DEFAULT_HEIGHT = 650
 

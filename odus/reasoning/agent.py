@@ -1,11 +1,5 @@
 """
-Agentic Loop — Observe → Think → Plan → Act → Verify → Repeat.
-
-DEV 2 owns this module.
-
-The Agent listens for events, runs Vision analysis, creates multi-step
-action plans (CLI commands + desktop control), and executes them
-step-by-step with verification screenshots between steps.
+Agentic Loop — Core event orchestration and analysis routing.
 """
 
 from __future__ import annotations
@@ -18,83 +12,46 @@ from odus.events import EventType, OdusEvent, get_event_bus
 from odus.perception.capture import ScreenCapture
 from odus.reasoning.tools import (
     tool_run_command,
-    tool_list_directory,
-    tool_read_file,
-    tool_explain,
-    tool_suggest_fix,
-    tool_move_and_click,
-    tool_type_text,
-    tool_press_key,
-    tool_scroll_screen,
-    tool_highlight_area,
     get_browser,
 )
 from odus.reasoning.vision import VisionAnalyzer, AnalysisResult
+from odus.reasoning.plan_executor import PlanExecutor
 
 logger = logging.getLogger(__name__)
 
-# Minimum seconds between captures (prevents runaway loops)
+# Minimum seconds between captures
 _CAPTURE_COOLDOWN = 3.0
-
-# Desktop control tool names (from prompts.py)
-_INPUT_TOOLS = frozenset({
-    "move_and_click", "type_text", "press_key",
-    "scroll_screen", "highlight_area",
-})
-
-# CLI & File tool names
-_CLI_TOOLS = frozenset({
-    "run_command", "explain", "suggest_fix",
-    "list_directory", "read_file",
-})
-
 
 class Agent:
     """
-    The Odus agentic loop.
-
-    Lifecycle:
-        1. Listens for CAPTURE_DONE or user query events on the bus.
-        2. Captures the screen + sends to Gemini Vision for analysis.
-        3. Receives a multi-step plan from Gemini.
-        4. Emits AGENT_PLAN_CREATED with the full plan.
-        5. Executes each step:
-           a. Emits AGENT_STEP_STARTED
-           b. Routes to the correct tool (CLI or desktop control)
-           c. Emits AGENT_STEP_DONE or INPUT_ACTION_FAILED
-           d. For desktop actions: takes a verification screenshot
-        6. Emits AGENT_PLAN_DONE when all steps are finished.
-        7. Waits for the next event.
+    The Odus agentic loop. Orchestrates capture, vision, and plan execution.
     """
 
     def __init__(self) -> None:
         self._bus = get_event_bus()
         self._vision = VisionAnalyzer()
         self._capture = ScreenCapture()
+        self._executor = PlanExecutor()
         self._running = False
-        self._capturing = False          # Guard against concurrent captures
-        self._last_capture_time = 0.0    # Debounce rapid capture requests
-        self._paused_context: dict | None = None  # Stores context while waiting for user
+        self._capturing = False
+        self._last_capture_time = 0.0
 
         logger.info("Agent initialized")
 
     async def start(self) -> None:
-        """Start the agentic loop. Runs until stop() is called."""
+        """Start the agentic loop."""
         self._running = True
 
-        # One-time setup (e.g., PipeWire ScreenCast consent dialog)
         try:
             await self._capture.initialize()
         except Exception as e:
             logger.warning("Capture initialization warning: %s", e)
 
         listener = self._bus.listen()
-
         logger.info("Agent loop started — waiting for events...")
 
         async for event in listener:
-            if not self._running:
-                break
+            if not self._running: break
 
             if event.type == EventType.CAPTURE_STARTED:
                 query = event.payload.get("query", "") if event.payload else ""
@@ -110,498 +67,197 @@ class Agent:
                 await self._handle_permission_granted(event.payload)
 
             elif event.type == EventType.PERMISSION_DENIED:
-                self._paused_context = None
+                self._executor.paused_context = None
+
+            elif event.type == EventType.AGENT_PLAN_CONFIRMED:
+                await self._handle_plan_confirmed(event.payload)
 
     async def stop(self) -> None:
-        """Stop the agentic loop."""
         self._running = False
         logger.info("Agent loop stopped")
 
-    # ── Capture + Analysis Pipeline ────────────────────────────────────
-
     async def _handle_capture(self, query: str = "") -> None:
-        """Full capture → analyze → plan → act pipeline with debounce + guard."""
-
-        # ── Guard: skip if already capturing ──
-        if self._capturing:
-            logger.debug("Capture already in progress — ignoring duplicate event")
-            return
-
-        # ── Debounce: enforce cooldown between captures ──
+        if self._capturing: return
         now = time.monotonic()
-        elapsed = now - self._last_capture_time
-        if elapsed < _CAPTURE_COOLDOWN:
-            remaining = _CAPTURE_COOLDOWN - elapsed
-            logger.debug("Capture cooldown: %.1fs remaining — skipping", remaining)
-            return
+        if now - self._last_capture_time < _CAPTURE_COOLDOWN: return
 
         self._capturing = True
-        self._last_capture_time = time.monotonic()
+        self._last_capture_time = now
 
         try:
-            # 1. CAPTURE
             logger.info("📸 Capturing screen...")
             result = await self._capture.grab_full_screen()
-            compressed = self._capture.compress(result.png_bytes)
+            compressed, ai_w, ai_h = self._capture.compress(result.png_bytes)
 
-            await self._bus.emit(
-                OdusEvent(EventType.CAPTURE_DONE, {
-                    "width": result.width,
-                    "height": result.height,
-                    "size_bytes": len(compressed),
-                })
-            )
+            await self._bus.emit(OdusEvent(EventType.CAPTURE_DONE, {
+                "width": result.width, "height": result.height, "size_bytes": len(compressed),
+            }))
 
-            # 2. ANALYZE
             await self._bus.emit(OdusEvent(EventType.ANALYSIS_STARTED))
             logger.info("🧠 Analyzing with Gemini Vision...")
+            analysis = await self._vision.analyze(
+                compressed, 
+                user_context=query,
+                image_width=ai_w,
+                image_height=ai_h
+            )
 
-            analysis = await self._vision.analyze(compressed, user_context=query)
+            # 📏 Scale coordinates back to native resolution
+            self._scale_coordinates(analysis, ai_w, ai_h, result.width, result.height)
 
-            # 3. DECIDE & ACT
             await self._process_analysis(analysis)
 
         except Exception as e:
             logger.error("Pipeline error: %s", e, exc_info=True)
-            await self._bus.emit(
-                OdusEvent(EventType.ERROR, {"message": str(e)})
-            )
-
+            await self._bus.emit(OdusEvent(EventType.ERROR, {"message": str(e)}))
         finally:
             self._capturing = False
 
-    # ── Analysis Processing ────────────────────────────────────────────
+    def _scale_coordinates(self, analysis: AnalysisResult, ai_w: int, ai_h: int, orig_w: int, orig_h: int) -> None:
+        """Scales coordinates from AI resolution back to native screen resolution."""
+        if ai_w == orig_w and ai_h == orig_h:
+            return
+
+        scale_x = orig_w / ai_w
+        scale_y = orig_h / ai_h
+        
+        logger.debug("Scaling AI coordinates (%dx%d -> %dx%d): x%.2f, y%.2f", 
+                     ai_w, ai_h, orig_w, orig_h, scale_x, scale_y)
+
+        for step in analysis.plan:
+            params = step.get("params", {})
+            orig_params = params.copy()
+            modified = False
+
+            if "x" in params and params["x"] is not None:
+                params["x"] = round(params["x"] * scale_x)
+                modified = True
+            if "y" in params and params["y"] is not None:
+                params["y"] = round(params["y"] * scale_y)
+                modified = True
+            if "width" in params and params["width"] is not None:
+                params["width"] = round(params["width"] * scale_x)
+                modified = True
+            if "height" in params and params["height"] is not None:
+                params["height"] = round(params["height"] * scale_y)
+                modified = True
+            
+            if modified:
+                logger.info(
+                    "📍 Scaled step %d coords (Scale: %.2f, %.2f): (%s, %s) -> (%s, %s)", 
+                    step.get('step'),
+                    scale_x, scale_y,
+                    orig_params.get('x'), orig_params.get('y'),
+                    params.get('x'), params.get('y')
+                )
 
     async def _process_analysis(self, analysis: AnalysisResult) -> None:
-        """Route the analysis result — now supports multi-step plans."""
-
-        # Check if the new plan-based format is available
         if analysis.plan:
-            await self._process_plan(analysis)
+            await self._executor.process_plan(analysis)
             return
 
-        # Legacy path: single suggested_commands (backward-compatible)
         if not analysis.suggested_commands:
-            # No action needed — just explain
-            await self._bus.emit(
-                OdusEvent(EventType.ANALYSIS_DONE, {
-                    "summary": analysis.summary,
-                    "explanation": analysis.explanation_for_user,
-                    "commands": [],
-                    "confidence": analysis.confidence,
-                    "follow_up": analysis.follow_up_hint,
-                })
-            )
-            return
-
-        for cmd in analysis.suggested_commands:
-            if cmd.safety_tier == 1:
-                # Auto-execute safe commands
-                await self._bus.emit(OdusEvent(EventType.EXECUTION_STARTED))
-                result = tool_run_command(
-                    cmd.command, cmd.safety_tier, cmd.description
-                )
-                await self._bus.emit(
-                    OdusEvent(EventType.EXECUTION_DONE, {
-                        "summary": analysis.summary,
-                        "explanation": analysis.explanation_for_user,
-                        "result": result,
-                        "confidence": analysis.confidence,
-                    })
-                )
-
-            elif cmd.safety_tier == 2:
-                # Needs user confirmation
-                await self._bus.emit(
-                    OdusEvent(EventType.CONFIRM_REQUIRED, {
-                        "summary": analysis.summary,
-                        "explanation": analysis.explanation_for_user,
-                        "command": cmd.command,
-                        "description": cmd.description,
-                        "safety_tier": cmd.safety_tier,
-                        "confidence": analysis.confidence,
-                    })
-                )
-
-            else:
-                # Tier 3 — blocked
-                await self._bus.emit(
-                    OdusEvent(EventType.ANALYSIS_DONE, {
-                        "summary": analysis.summary,
-                        "explanation": analysis.explanation_for_user,
-                        "commands": [],
-                        "blocked_command": cmd.command,
-                        "confidence": analysis.confidence,
-                        "warning": (
-                            f"⚠️ Command '{cmd.command}' was classified as "
-                            f"DANGEROUS and was blocked for your safety."
-                        ),
-                    })
-                )
-
-    # ── Multi-Step Plan Execution ──────────────────────────────────────
-
-    async def _process_plan(self, analysis: AnalysisResult) -> None:
-        """Execute a multi-step action plan from the new format."""
-
-        plan = analysis.plan
-        total_steps = len(plan)
-
-        logger.info("📋 Received %d-step action plan", total_steps)
-
-        # Emit the full plan to the UI
-        await self._bus.emit(
-            OdusEvent(EventType.AGENT_PLAN_CREATED, {
+            await self._bus.emit(OdusEvent(EventType.ANALYSIS_DONE, {
                 "summary": analysis.summary,
                 "explanation": analysis.explanation_for_user,
-                "plan": plan,
-                "total_steps": total_steps,
-                "confidence": analysis.confidence,
-            })
-        )
-
-        # Execute each step
-        for i, step in enumerate(plan, start=1):
-            action_type = step.get("action_type", "")
-            params = step.get("params", {})
-            description = step.get("description", "")
-            safety_tier = step.get("safety_tier", 2)
-
-            logger.info("▶ Step %d/%d: %s — %s", i, total_steps, action_type, description)
-
-            await self._bus.emit(
-                OdusEvent(EventType.AGENT_STEP_STARTED, {
-                    "step": i,
-                    "total_steps": total_steps,
-                    "action_type": action_type,
-                    "description": description,
-                    "params": params,
-                })
-            )
-
-            try:
-                result = await self._execute_step(action_type, params, safety_tier, description)
-
-                # If the step needs user confirmation, stop here and wait
-                if result and result.get("status") == "needs_confirmation":
-                    self._paused_context = {
-                        "analysis": analysis,
-                        "step_index": i,  # 1-based current step
-                        "plan": plan,
-                    }
-                    await self._bus.emit(
-                        OdusEvent(EventType.INPUT_ACTION_PLANNED, {
-                            "step": i,
-                            "total_steps": total_steps,
-                            "action": result,
-                            "remaining_plan": plan[i:],
-                        })
-                    )
-                    return
-
-                # If the step needs permission (directory/file), stop and wait
-                if result and result.get("status") == "needs_permission":
-                    self._paused_context = {
-                        "analysis": analysis,
-                        "step_index": i,
-                        "plan": plan,
-                    }
-                    await self._bus.emit(
-                        OdusEvent(EventType.PERMISSION_REQUESTED, {
-                            "step": i,
-                            "total_steps": total_steps,
-                            "resource_type": result.get("resource_type"),
-                            "path": result.get("path"),
-                            "description": result.get("description"),
-                        })
-                    )
-                    return
-
-                if result and result.get("status") == "blocked":
-                    await self._bus.emit(
-                        OdusEvent(EventType.INPUT_ACTION_FAILED, {
-                            "step": i,
-                            "total_steps": total_steps,
-                            "reason": result.get("reason", "Action blocked by safety gate."),
-                        })
-                    )
-                    # Stop the plan — a blocked step halts everything
-                    return
-
-                # Step succeeded
-                await self._bus.emit(
-                    OdusEvent(EventType.AGENT_STEP_DONE, {
-                        "step": i,
-                        "total_steps": total_steps,
-                        "action_type": action_type,
-                        "description": description,
-                        "result": result,
-                    })
-                )
-
-                # Brief pause between steps for the desktop to settle
-                if i < total_steps and action_type in _INPUT_TOOLS:
-                    await asyncio.sleep(0.5)
-
-            except Exception as e:
-                logger.error("Step %d/%d failed: %s", i, total_steps, e, exc_info=True)
-                await self._bus.emit(
-                    OdusEvent(EventType.INPUT_ACTION_FAILED, {
-                        "step": i,
-                        "total_steps": total_steps,
-                        "reason": str(e),
-                    })
-                )
-                return  # Stop plan on error
-
-        # All steps completed
-        await self._bus.emit(
-            OdusEvent(EventType.AGENT_PLAN_DONE, {
-                "summary": analysis.summary,
-                "total_steps": total_steps,
-            })
-        )
-
-    async def _execute_step(
-        self,
-        action_type: str,
-        params: dict,
-        safety_tier: int,
-        description: str,
-    ) -> dict:
-        """Route a single plan step to the correct tool."""
-
-        if action_type == "run_command":
-            return await tool_run_command(
-                command=params.get("command", ""),
-                safety_tier=safety_tier,
-                explanation=description,
-            )
-
-        elif action_type == "list_directory":
-            return await tool_list_directory(
-                path=params.get("path", "."),
-                explanation=description,
-            )
-
-        elif action_type == "read_file":
-            return await tool_read_file(
-                path=params.get("path", ""),
-                explanation=description,
-            )
-
-        elif action_type == "explain":
-            return tool_explain(
-                topic=params.get("topic", ""),
-                explanation=description,
-            )
-
-        elif action_type == "suggest_fix":
-            return tool_suggest_fix(
-                command=params.get("command", ""),
-                safety_tier=safety_tier,
-                explanation=description,
-                risk_warning=params.get("risk_warning", ""),
-            )
-
-        elif action_type == "move_and_click":
-            return await tool_move_and_click(
-                x=params.get("x", 0),
-                y=params.get("y", 0),
-                target_description=params.get("target_description", description),
-                safety_tier=safety_tier,
-                explanation=description,
-                button=params.get("button", "left"),
-                click_type=params.get("click_type", "single"),
-            )
-
-        elif action_type == "type_text":
-            return await tool_type_text(
-                text=params.get("text", ""),
-                target_description=params.get("target_description", description),
-                safety_tier=safety_tier,
-                explanation=description,
-            )
-
-        elif action_type == "press_key":
-            return await tool_press_key(
-                keys=params.get("keys", []),
-                target_description=params.get("target_description", description),
-                safety_tier=safety_tier,
-                explanation=description,
-            )
-
-        elif action_type == "scroll_screen":
-            return await tool_scroll_screen(
-                direction=params.get("direction", "down"),
-                explanation=description,
-                amount=params.get("amount", 3),
-            )
-
-        elif action_type == "highlight_area":
-            return await tool_highlight_area(
-                x=params.get("x", 0),
-                y=params.get("y", 0),
-                width=params.get("width", 100),
-                height=params.get("height", 100),
-                explanation=description,
-            )
-
-        else:
-            logger.warning("Unknown action type: %s", action_type)
-            return {
-                "status": "error",
-                "reason": f"Unknown action type: {action_type}",
-            }
-
-    # ── User Confirmation Handlers ─────────────────────────────────────
-
-    async def _handle_user_confirmed(self, payload: dict) -> None:
-        """Execute a CLI command the user has confirmed."""
-        command = payload.get("command", "")
-        explanation = payload.get("explanation", "")
-
-        if not command:
+                "commands": [], "confidence": analysis.confidence,
+                "follow_up": analysis.follow_up_hint,
+            }))
             return
 
+        # Legacy command handling (Tier 1/2/3)
+        for cmd in analysis.suggested_commands:
+            if cmd.safety_tier == 1:
+                await self._bus.emit(OdusEvent(EventType.EXECUTION_STARTED))
+                result = await tool_run_command(cmd.command, cmd.safety_tier, cmd.description)
+                await self._bus.emit(OdusEvent(EventType.EXECUTION_DONE, {
+                    "summary": analysis.summary, "explanation": analysis.explanation_for_user,
+                    "result": result, "confidence": analysis.confidence,
+                }))
+            elif cmd.safety_tier == 2:
+                await self._bus.emit(OdusEvent(EventType.CONFIRM_REQUIRED, {
+                    "summary": analysis.summary, "explanation": analysis.explanation_for_user,
+                    "command": cmd.command, "description": cmd.description,
+                    "safety_tier": cmd.safety_tier, "confidence": analysis.confidence,
+                }))
+            else:
+                await self._bus.emit(OdusEvent(EventType.ANALYSIS_DONE, {
+                    "summary": analysis.summary, "explanation": analysis.explanation_for_user,
+                    "commands": [], "confidence": analysis.confidence,
+                    "warning": f"⚠️ Command '{cmd.command}' was DANGEROUS and blocked.",
+                }))
+
+    async def _handle_user_confirmed(self, payload: dict) -> None:
+        command, explanation = payload.get("command", ""), payload.get("explanation", "")
+        if not command: return
         await self._bus.emit(OdusEvent(EventType.EXECUTION_STARTED))
-
         result = await tool_run_command(command, 2, explanation)
-
-        await self._bus.emit(
-            OdusEvent(EventType.EXECUTION_DONE, {
-                "summary": f"Executed: {command}",
-                "explanation": explanation,
-                "result": result,
-            })
-        )
+        await self._bus.emit(OdusEvent(EventType.EXECUTION_DONE, {
+            "summary": f"Executed: {command}", "explanation": explanation, "result": result,
+        }))
 
     async def _handle_input_action_confirmed(self, payload: dict) -> None:
-        """Execute a desktop action the user has confirmed."""
-        action = payload.get("action", {})
+        action = payload.get("action", payload)
         action_type = action.get("action_type", "")
         explanation = action.get("explanation", "")
 
-        logger.info("User confirmed input action: %s", action_type)
+        if not action_type and action.get("command"):
+            action_type = "run_command"
+            action["action_type"] = "run_command"
 
-        await self._bus.emit(
-            OdusEvent(EventType.INPUT_ACTION_EXECUTING, {
+        logger.info("User confirmed action: %s", action_type)
+        # Note: PlanExecutor already emits EXECUTING if this is part of a plan.
+        # Direct confirmation still needs it.
+        if not self._executor.paused_context:
+            await self._bus.emit(OdusEvent(EventType.INPUT_ACTION_EXECUTING, {
                 "action_type": action_type,
                 "description": explanation,
-            })
-        )
+                "x": action.get("x"),
+                "y": action.get("y"),
+            }))
+            await asyncio.sleep(0.4)
 
         try:
-            result = await self._execute_confirmed_input(action)
+            result = await self._executor.execute_confirmed_input(action)
+            await self._bus.emit(OdusEvent(EventType.INPUT_ACTION_DONE, {
+                "action_type": action_type, "result": result,
+            }))
 
-            await self._bus.emit(
-                OdusEvent(EventType.INPUT_ACTION_DONE, {
-                    "action_type": action_type,
-                    "result": result,
-                })
-            )
-
-            # If there are remaining plan steps, continue executing them
-            remaining = payload.get("remaining_plan", [])
-            if remaining:
-                logger.info("Resuming plan: %d steps remaining", len(remaining))
-                # We'd need the original analysis context here — for now emit status
-                await self._bus.emit(
-                    OdusEvent(EventType.STATUS_UPDATE, {
-                        "message": f"✅ Action completed. {len(remaining)} steps remaining.",
-                    })
-                )
-
+            if self._executor.paused_context:
+                ctx = self._executor.paused_context
+                self._executor.paused_context = None
+                remaining = ctx["plan"][ctx["step_index"]:]
+                if remaining:
+                    logger.info("Resuming plan from step %d", ctx["step_index"] + 1)
+                    await self._executor.process_plan(self._mock_analysis(ctx, remaining))
+                else:
+                    await self._bus.emit(OdusEvent(EventType.AGENT_PLAN_DONE, {"total_steps": len(ctx['plan'])}))
         except Exception as e:
-            logger.error("Input action execution failed: %s", e, exc_info=True)
-            await self._bus.emit(
-                OdusEvent(EventType.INPUT_ACTION_FAILED, {
-                    "action_type": action_type,
-                    "reason": str(e),
-                })
-            )
-
-    async def _execute_confirmed_input(self, action: dict) -> dict:
-        """Execute a confirmed input action by dispatching to the simulator."""
-        from odus.action.input_sim import get_input_simulator
-
-        sim = get_input_simulator()
-        action_type = action.get("action_type", "")
-
-        if action_type == "move_and_click":
-            click_type = action.get("click_type", "single")
-            button = action.get("button", "left")
-            x, y = action.get("x", 0), action.get("y", 0)
-            if click_type == "double":
-                result = await sim.double_click(x, y)
-            elif button == "right":
-                result = await sim.right_click(x, y)
-            else:
-                result = await sim.click(x, y, button=button)
-
-        elif action_type == "type_text":
-            result = await sim.type_text(action.get("text", ""))
-
-        elif action_type == "press_key":
-            keys = action.get("keys", [])
-            if len(keys) == 1:
-                result = await sim.press_key(keys[0])
-            else:
-                result = await sim.hotkey(*keys)
-
-        elif action_type == "scroll_screen":
-            result = await sim.scroll(
-                action.get("direction", "down"),
-                action.get("amount", 3),
-            )
-
-        else:
-            raise ValueError(f"Cannot execute confirmed action of type: {action_type}")
-
-        return {
-            "status": "executed" if result.success else "failed",
-            "description": result.description,
-            "error": result.error,
-            "duration_ms": result.duration_ms,
-        }
+            logger.error("Execution failed: %s", e, exc_info=True)
+            await self._bus.emit(OdusEvent(EventType.INPUT_ACTION_FAILED, {"action_type": action_type, "reason": str(e)}))
 
     async def _handle_permission_granted(self, payload: dict) -> None:
-        """Handle directory/file permission being granted by the user."""
         path = payload.get("path", "")
-        if not path:
-            return
-
-        logger.info("User granted permission for: %s", path)
+        if not path: return
+        logger.info("Permission granted for: %s", path)
         get_browser().grant_access(path)
 
-        # Resume plan if we have one paused
-        if self._paused_context:
-            ctx = self._paused_context
-            self._paused_context = None
-            
-            # Resume from the next step (or re-execute the current one now that we have permission)
-            # Re-executing current step is safer since it was the one that failed
+        if self._executor.paused_context:
+            ctx = self._executor.paused_context
+            self._executor.paused_context = None
+            remaining = ctx["plan"][ctx["step_index"] - 1:]
             logger.info("Resuming plan from step %d", ctx["step_index"])
-            
-            # Extract the remaining plan starting from the paused step
-            plan = ctx["plan"]
-            start_idx = ctx["step_index"] - 1 # 0-based
-            remaining_plan = plan[start_idx:]
-            
-            # Reuse _process_plan but with the partial plan
-            # We construct a dummy AnalysisResult to keep the logic clean
-            class MockAnalysis:
-                def __init__(self, summary, explanation, plan, confidence):
-                    self.summary = summary
-                    self.explanation_for_user = explanation
-                    self.plan = plan
-                    self.confidence = confidence
+            await self._executor.process_plan(self._mock_analysis(ctx, remaining))
 
-            mock_analysis = MockAnalysis(
-                ctx["analysis"].summary,
-                ctx["analysis"].explanation_for_user,
-                remaining_plan,
-                ctx["analysis"].confidence
-            )
-            
-            await self._process_plan(mock_analysis)
+    async def _handle_plan_confirmed(self, payload: dict) -> None:
+        if self._executor.paused_context and self._executor.paused_context.get("bulk"):
+            ctx = self._executor.paused_context
+            self._executor.paused_context = None
+            logger.info("Plan bulk-authorized.")
+            await self._executor.process_plan(ctx["analysis"], bulk_authorized=True)
+
+    def _mock_analysis(self, ctx: dict, plan: list) -> AnalysisResult:
+        class MockAnalysis:
+            def __init__(self, s, e, p, c):
+                self.summary, self.explanation_for_user, self.plan, self.confidence = s, e, p, c
+        return MockAnalysis(ctx["analysis"].summary, ctx["analysis"].explanation_for_user, plan, ctx["analysis"].confidence)

@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt, QObject
 
 from odus.events import EventType, OdusEvent, get_event_bus
 from odus.ui.main_window import OdusMainWindow
-from odus.ui.chat_interface import ChatPanel
+from odus.ui.chat_panel import ChatPanel
 from odus.ui.ghost_terminal import GhostTerminal
 from odus.ui.overlay import ActionOverlay
 from odus.ui.mascot import MascotState
@@ -62,6 +62,7 @@ class OdusApp(QObject):
 
         # Permission confirmations from inline cards
         self._chat.action_confirmed.connect(self._on_action_confirmed)
+        self._chat.plan_confirmed.connect(self._on_plan_confirmed)
 
         # Terminal CWD
         self._terminal.set_cwd(os.getcwd())
@@ -101,6 +102,11 @@ class OdusApp(QObject):
             }))
         )
 
+    def _on_plan_confirmed(self) -> None:
+        asyncio.ensure_future(
+            self._bus.emit(OdusEvent(EventType.AGENT_PLAN_CONFIRMED))
+        )
+
     def _on_user_query(self, query: str) -> None:
         self._chat.add_user_message(query)
         asyncio.ensure_future(
@@ -125,6 +131,33 @@ class OdusApp(QObject):
     # ── Event Loop ─────────────────────────────────────────────────────
 
     async def _event_loop(self) -> None:
+        self._handlers = {
+            EventType.CAPTURE_STARTED: self._on_capture_started,
+            EventType.CAPTURE_DONE: self._on_capture_done,
+            EventType.ANALYSIS_STARTED: self._on_analysis_started,
+            EventType.ANALYSIS_DONE: self._on_analysis_done,
+            EventType.CONFIRM_REQUIRED: self._on_confirm_required,
+            EventType.EXECUTION_STARTED: self._on_execution_started,
+            EventType.EXECUTION_DONE: self._on_execution_done,
+            EventType.AGENT_PLAN_CREATED: self._on_agent_plan_created,
+            EventType.AGENT_PLAN_CONFIRMED: self._on_agent_plan_confirmed,
+            EventType.AGENT_STEP_STARTED: self._on_agent_step_started,
+            EventType.AGENT_STEP_DONE: self._on_agent_step_done,
+            EventType.AGENT_PLAN_DONE: self._on_agent_plan_done,
+            EventType.INPUT_ACTION_PLANNED: self._on_input_action_planned,
+            EventType.INPUT_ACTION_EXECUTING: self._on_input_action_executing,
+            EventType.INPUT_ACTION_DONE: self._on_input_action_done,
+            EventType.INPUT_ACTION_FAILED: self._on_input_action_failed,
+            EventType.PERMISSION_REQUESTED: self._on_permission_requested,
+            EventType.PERMISSION_GRANTED: self._on_permission_granted,
+            EventType.PERMISSION_DENIED: self._on_permission_denied,
+            EventType.TERMINAL_OUTPUT_LINE: self._on_terminal_output_line,
+            EventType.TERMINAL_COMMAND_STARTED: self._on_terminal_command_started,
+            EventType.TERMINAL_COMMAND_DONE: self._on_terminal_command_done,
+            EventType.TERMINAL_CWD_CHANGED: self._on_terminal_cwd_changed,
+            EventType.ERROR: self._on_error,
+            EventType.STATUS_UPDATE: self._on_status_update,
+        }
         listener = self._bus.listen()
         async for event in listener:
             try:
@@ -133,222 +166,245 @@ class OdusApp(QObject):
                 logger.error("UI event handler error: %s", e, exc_info=True)
 
     async def _handle_event(self, event: OdusEvent) -> None:
+        handler = self._handlers.get(event.type)
+        if handler:
+            await handler(event)
 
-        # ── Capture Pipeline ──
+    async def _on_capture_started(self, event: OdusEvent) -> None:
+        self._window.mascot.set_state(MascotState.THINKING)
+        self._window.sidebar.set_status("Capturing...", Colors.ACCENT)
+        self._chat.add_system_log("📸 Capturing screen...")
 
-        if event.type == EventType.CAPTURE_STARTED:
-            self._window.mascot.set_state(MascotState.THINKING)
-            self._window.sidebar.set_status("Capturing...", Colors.ACCENT)
-            self._chat.add_system_log("📸 Capturing screen...")
+    async def _on_capture_done(self, event: OdusEvent) -> None:
+        size_kb = event.payload.get("size_bytes", 0) / 1024
+        self._chat.add_system_log(
+            f"Captured ({event.payload.get('width', '?')}×{event.payload.get('height', '?')}, {size_kb:.0f} KB)",
+            color=Colors.SUCCESS,
+        )
 
-        elif event.type == EventType.CAPTURE_DONE:
-            size_kb = event.payload.get("size_bytes", 0) / 1024
-            self._chat.add_system_log(
-                f"Captured ({event.payload.get('width', '?')}×{event.payload.get('height', '?')}, {size_kb:.0f} KB)",
-                color=Colors.SUCCESS,
-            )
+    async def _on_analysis_started(self, event: OdusEvent) -> None:
+        self._window.sidebar.set_status("Analyzing...", Colors.ACCENT)
+        self._chat.add_system_log("🧠 Analyzing with Gemini...")
 
-        elif event.type == EventType.ANALYSIS_STARTED:
-            self._window.sidebar.set_status("Analyzing...", Colors.ACCENT)
-            self._chat.add_system_log("🧠 Analyzing with Gemini...")
+    async def _on_analysis_done(self, event: OdusEvent) -> None:
+        self._window.mascot.set_state(MascotState.SUCCESS)
+        self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
+        payload = event.payload
 
-        elif event.type == EventType.ANALYSIS_DONE:
-            self._window.mascot.set_state(MascotState.SUCCESS)
-            self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
-            payload = event.payload
+        self._chat.add_ai_message(payload.get("summary", ""))
+        explanation = payload.get("explanation", "")
+        if explanation and explanation != payload.get("summary", ""):
+            self._chat.add_ai_message(explanation)
 
-            self._chat.add_ai_message(payload.get("summary", ""))
-            explanation = payload.get("explanation", "")
-            if explanation and explanation != payload.get("summary", ""):
-                self._chat.add_ai_message(explanation)
+        if payload.get("warning"):
+            self._chat.add_system_log(payload["warning"], color=Colors.WARNING)
+        if payload.get("follow_up"):
+            self._chat.add_system_log(f"💡 {payload['follow_up']}")
 
-            if payload.get("warning"):
-                self._chat.add_system_log(payload["warning"], color=Colors.WARNING)
-            if payload.get("follow_up"):
-                self._chat.add_system_log(f"💡 {payload['follow_up']}")
+    async def _on_confirm_required(self, event: OdusEvent) -> None:
+        self._window.mascot.set_state(MascotState.WARNING)
+        self._window.sidebar.set_tier(2)
+        payload = event.payload
 
-        # ── Command Confirmation ──
+        command = payload.get("command", "")
+        explanation = payload.get("explanation", "")
+        tier = payload.get("safety_tier", 2)
 
-        elif event.type == EventType.CONFIRM_REQUIRED:
-            self._window.mascot.set_state(MascotState.WARNING)
-            self._window.sidebar.set_tier(2)
-            payload = event.payload
+        # Inline permission card instead of QMessageBox
+        self._chat.add_permission_card(
+            title="Command Execution",
+            description=explanation,
+            action_data={"command": command, "explanation": explanation},
+            tier=tier,
+        )
 
-            command = payload.get("command", "")
-            explanation = payload.get("explanation", "")
-            tier = payload.get("safety_tier", 2)
+    async def _on_execution_started(self, event: OdusEvent) -> None:
+        self._window.switch_tab("terminal")
+        self._window.sidebar.set_status("Executing...", Colors.ACCENT)
+        self._chat.add_system_log("⚡ Executing...")
 
-            # Inline permission card instead of QMessageBox
-            self._chat.add_permission_card(
-                title="Command Execution",
-                description=explanation,
-                action_data={"command": command, "explanation": explanation},
-                tier=tier,
-            )
+    async def _on_execution_done(self, event: OdusEvent) -> None:
+        result = event.payload.get("result", {})
+        status = result.get("status", "unknown")
 
-        elif event.type == EventType.EXECUTION_STARTED:
-            self._window.switch_tab("terminal")
-            self._window.sidebar.set_status("Executing...", Colors.ACCENT)
-            self._chat.add_system_log("⚡ Executing...")
-
-        elif event.type == EventType.EXECUTION_DONE:
-            result = event.payload.get("result", {})
-            status = result.get("status", "unknown")
-
-            if status == "executed":
-                rc = result.get("return_code", -1)
-                if rc == 0:
-                    self._window.mascot.set_state(MascotState.SUCCESS)
-                    self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
-                    self._window.sidebar.set_tier(1)
-                    self._terminal.add_success("Command succeeded")
-                else:
-                    self._window.mascot.set_state(MascotState.ERROR)
-                    self._window.sidebar.set_status("Error", Colors.DANGER)
-                    self._terminal.add_error(f"Exited with code {rc}")
-
-                if result.get("stdout"):
-                    self._terminal.add_output(result["stdout"])
-                if result.get("stderr"):
-                    self._terminal.add_error(result["stderr"])
-
-            elif status == "blocked":
-                self._window.mascot.set_state(MascotState.ERROR)
-                self._window.sidebar.set_tier(3)
-                self._chat.add_system_log(
-                    f"🚫 {result.get('reason', 'Blocked')}",
-                    color=Colors.DANGER,
-                )
-
-        # ── Multi-Step Plan ──
-
-        elif event.type == EventType.AGENT_PLAN_CREATED:
-            self._window.mascot.set_state(MascotState.THINKING)
-            self._window.sidebar.set_status("Planning...", Colors.ACCENT)
-            payload = event.payload
-            self._chat.add_action_plan(
-                summary=payload.get("explanation", payload.get("summary", "")),
-                steps=payload.get("plan", []),
-            )
-
-        elif event.type == EventType.AGENT_STEP_STARTED:
-            step = event.payload.get("step", 0)
-            self._chat.update_action_step(step, "running")
-
-        elif event.type == EventType.AGENT_STEP_DONE:
-            step = event.payload.get("step", 0)
-            self._chat.update_action_step(step, "done")
-
-        elif event.type == EventType.AGENT_PLAN_DONE:
-            self._window.mascot.set_state(MascotState.SUCCESS)
-            self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
-            total = event.payload.get("total_steps", 0)
-            self._chat.add_system_log(f"✅ All {total} steps completed!", color=Colors.SUCCESS)
-
-        # ── Input Actions ──
-
-        elif event.type == EventType.INPUT_ACTION_PLANNED:
-            self._window.mascot.set_state(MascotState.WARNING)
-            payload = event.payload
-            action = payload.get("action", {})
-            action_type = action.get("action_type", "")
-            explanation = action.get("explanation", "")
-
-            # Show overlay
-            if action_type == "move_and_click":
-                x, y = action.get("x", 0), action.get("y", 0)
-                target = action.get("target_description", "")
-                self._overlay.show_crosshair(x, y, label=f"Click: {target}")
-            elif action_type == "highlight_area":
-                self._overlay.show_highlight(
-                    x=action.get("x", 0), y=action.get("y", 0),
-                    w=action.get("width", 100), h=action.get("height", 100),
-                    label=explanation,
-                )
-
-            # Inline permission card
-            self._chat.add_permission_card(
-                title=f"Desktop Action: {action_type}",
-                description=explanation,
-                action_data=payload,
-                tier=2,
-            )
-
-        elif event.type == EventType.INPUT_ACTION_EXECUTING:
-            self._chat.add_system_log(
-                f"🎯 {event.payload.get('description', 'Executing...')}",
-                color=Colors.ACCENT,
-            )
-
-        elif event.type == EventType.INPUT_ACTION_DONE:
-            self._overlay.dismiss()
-            self._window.mascot.set_state(MascotState.SUCCESS)
-            result = event.payload.get("result", {})
-            self._chat.add_system_log(
-                f"✅ {result.get('description', 'Done')}",
-                color=Colors.SUCCESS,
-            )
-
-        elif event.type == EventType.INPUT_ACTION_FAILED:
-            self._overlay.dismiss()
-            self._window.mascot.set_state(MascotState.ERROR)
-            self._chat.add_system_log(
-                f"❌ {event.payload.get('reason', 'Failed')}",
-                color=Colors.DANGER,
-            )
-
-        # ── Permission Events ──
-
-        elif event.type == EventType.PERMISSION_REQUESTED:
-            path = event.payload.get("path", "")
-            desc = event.payload.get("description", f"Access to {path}")
-            self._chat.add_permission_card(
-                title="Directory Access",
-                description=desc,
-                action_data=event.payload,
-                tier=1,
-            )
-
-        elif event.type == EventType.PERMISSION_GRANTED:
-            path = event.payload.get("path", "")
-            self._chat.add_system_log(f"✅ Access granted: {path}", color=Colors.SUCCESS)
-
-        elif event.type == EventType.PERMISSION_DENIED:
-            path = event.payload.get("path", "")
-            self._chat.add_system_log(f"🚫 Access denied: {path}", color=Colors.DANGER)
-
-        # ── Terminal Streaming ──
-
-        elif event.type == EventType.TERMINAL_OUTPUT_LINE:
-            line = event.payload.get("line", "")
-            self._terminal.add_stream_line(line)
-
-        elif event.type == EventType.TERMINAL_COMMAND_STARTED:
-            cmd = event.payload.get("command", "")
-            self._terminal.add_command(cmd)
-            self._window.switch_tab("terminal")
-
-        elif event.type == EventType.TERMINAL_COMMAND_DONE:
-            rc = event.payload.get("exit_code", 0)
+        if status == "executed":
+            rc = result.get("return_code", -1)
             if rc == 0:
-                self._terminal.add_success("Command finished")
+                self._window.mascot.set_state(MascotState.SUCCESS)
+                self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
+                self._window.sidebar.set_tier(1)
+                self._terminal.add_success("Command succeeded")
             else:
+                self._window.mascot.set_state(MascotState.ERROR)
+                self._window.sidebar.set_status("Error", Colors.DANGER)
                 self._terminal.add_error(f"Exited with code {rc}")
-            self._terminal.add_divider()
 
-        elif event.type == EventType.TERMINAL_CWD_CHANGED:
-            new_cwd = event.payload.get("cwd", "")
-            self._terminal.set_cwd(new_cwd)
+            if result.get("stdout"):
+                self._terminal.add_output(result["stdout"])
+            if result.get("stderr"):
+                self._terminal.add_error(result["stderr"])
 
-        # ── System ──
-
-        elif event.type == EventType.ERROR:
+        elif status == "blocked":
             self._window.mascot.set_state(MascotState.ERROR)
-            self._window.sidebar.set_status("Error", Colors.DANGER)
+            self._window.sidebar.set_tier(3)
             self._chat.add_system_log(
-                f"Error: {event.payload.get('message', 'Unknown')}",
+                f"🚫 {result.get('reason', 'Blocked')}",
                 color=Colors.DANGER,
             )
 
-        elif event.type == EventType.STATUS_UPDATE:
-            self._chat.add_system_log(event.payload.get("message", ""))
+    async def _on_agent_plan_created(self, event: OdusEvent) -> None:
+        self._window.mascot.set_state(MascotState.THINKING)
+        self._window.sidebar.set_status("Planning...", Colors.ACCENT)
+        payload = event.payload
+        self._chat.add_action_plan(
+            summary=payload.get("explanation", payload.get("summary", "")),
+            steps=payload.get("plan", []),
+            needs_confirmation=payload.get("needs_confirmation", False),
+        )
+
+    async def _on_agent_plan_confirmed(self, event: OdusEvent) -> None:
+        self._chat.add_system_log("Implementation plan authorized.", color=Colors.SUCCESS)
+        self._window.mascot.set_state(MascotState.THINKING)
+
+    async def _on_agent_step_started(self, event: OdusEvent) -> None:
+        step = event.payload.get("step", 0)
+        self._chat.update_action_step(step, "running")
+
+    async def _on_agent_step_done(self, event: OdusEvent) -> None:
+        step = event.payload.get("step", 0)
+        self._chat.update_action_step(step, "done")
+
+    async def _on_agent_plan_done(self, event: OdusEvent) -> None:
+        self._window.mascot.set_state(MascotState.SUCCESS)
+        self._window.sidebar.set_status("Ready", Colors.TEXT_SECONDARY)
+        total = event.payload.get("total_steps", 0)
+        self._chat.add_system_log(f"✅ All {total} steps completed!", color=Colors.SUCCESS)
+    async def _on_input_action_planned(self, event: OdusEvent) -> None:
+        self._window.mascot.set_state(MascotState.WARNING)
+        payload = event.payload
+        action = payload.get("action", {})
+        action_type = action.get("action_type", "")
+        explanation = action.get("explanation", "")
+
+        # Show overlay
+        if action_type == "move_and_click":
+            x, y = action.get("x", 0), action.get("y", 0)
+            target = action.get("target_description", "")
+            self._overlay.show_crosshair(x, y, label=f"Click: {target}")
+        elif action_type == "highlight_area":
+            target = action.get("target_description", "")
+            self._overlay.show_highlight(
+                x=action.get("x", 0), y=action.get("y", 0),
+                w=action.get("width", 100), h=action.get("height", 100),
+                label=f"Examine: {target}"
+            )
+
+        # Inline permission card
+        self._chat.add_permission_card(
+            title=f"Desktop Action: {action_type}",
+            description=explanation,
+            action_data=payload,
+            tier=2,
+        )
+
+    async def _on_input_action_executing(self, event: OdusEvent) -> None:
+        action_type = event.payload.get("action_type", "")
+        description = event.payload.get("description", "Executing...")
+        
+        self._chat.add_system_log(
+            f"🎯 {description}",
+            color=Colors.ACCENT,
+        )
+        
+        # 👻 Ghost Mode: Make Odus non-interactive so clicks pass through to targets
+        try:
+            self._window.setWindowOpacity(0.4)
+        except Exception:
+            # Some Wayland plugins don't support opacity changes
+            pass
+        self._window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        
+        # Show Ghost Cursor on overlay
+        x = event.payload.get("x")
+        y = event.payload.get("y")
+        is_kb = action_type in ("type_text", "press_key", "hotkey")
+        self._overlay.set_ghost_cursor(x, y, is_typing=is_kb)
+
+    async def _on_input_action_done(self, event: OdusEvent) -> None:
+        # Restore window from Ghost Mode
+        self._window.setWindowOpacity(1.0)
+        self._window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        
+        self._overlay.dismiss()
+        self._overlay.set_ghost_cursor(None, None)
+        
+        self._window.mascot.set_state(MascotState.SUCCESS)
+        result = event.payload.get("result", {})
+        self._chat.add_system_log(
+            f"✅ {result.get('description', 'Done')}",
+            color=Colors.SUCCESS,
+        )
+
+    async def _on_input_action_failed(self, event: OdusEvent) -> None:
+        # Restore window from Ghost Mode
+        self._window.setWindowOpacity(1.0)
+        self._window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        
+        self._overlay.dismiss()
+        self._overlay.set_ghost_cursor(None, None)
+        
+        self._window.mascot.set_state(MascotState.ERROR)
+        self._chat.add_system_log(
+            f"❌ {event.payload.get('reason', 'Failed')}",
+            color=Colors.DANGER,
+        )
+
+    async def _on_permission_requested(self, event: OdusEvent) -> None:
+        path = event.payload.get("path", "")
+        desc = event.payload.get("description", f"Access to {path}")
+        self._chat.add_permission_card(
+            title="Directory Access",
+            description=desc,
+            action_data=event.payload,
+            tier=1,
+        )
+
+    async def _on_permission_granted(self, event: OdusEvent) -> None:
+        path = event.payload.get("path", "")
+        self._chat.add_system_log(f"✅ Access granted: {path}", color=Colors.SUCCESS)
+
+    async def _on_permission_denied(self, event: OdusEvent) -> None:
+        path = event.payload.get("path", "")
+        self._chat.add_system_log(f"🚫 Access denied: {path}", color=Colors.DANGER)
+
+    async def _on_terminal_output_line(self, event: OdusEvent) -> None:
+        line = event.payload.get("line", "")
+        self._terminal.add_stream_line(line)
+
+    async def _on_terminal_command_started(self, event: OdusEvent) -> None:
+        cmd = event.payload.get("command", "")
+        self._terminal.add_command(cmd)
+        self._window.switch_tab("terminal")
+
+    async def _on_terminal_command_done(self, event: OdusEvent) -> None:
+        rc = event.payload.get("exit_code", 0)
+        if rc == 0:
+            self._terminal.add_success("Command finished")
+        else:
+            self._terminal.add_error(f"Exited with code {rc}")
+        self._terminal.add_divider()
+
+    async def _on_terminal_cwd_changed(self, event: OdusEvent) -> None:
+        new_cwd = event.payload.get("cwd", "")
+        self._terminal.set_cwd(new_cwd)
+
+    async def _on_error(self, event: OdusEvent) -> None:
+        self._window.mascot.set_state(MascotState.ERROR)
+        self._window.sidebar.set_status("Error", Colors.DANGER)
+        self._chat.add_system_log(
+            f"Error: {event.payload.get('message', 'Unknown')}",
+            color=Colors.DANGER,
+        )
+
+    async def _on_status_update(self, event: OdusEvent) -> None:
+        self._chat.add_system_log(event.payload.get("message", ""))

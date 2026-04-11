@@ -60,6 +60,7 @@ async def tool_run_command(
     command: str,
     safety_tier: int,
     explanation: str,
+    bypass_confirmation: bool = False,
 ) -> dict:
     """
     Execute a CLI command in a real PTY with real-time streaming output.
@@ -79,9 +80,10 @@ async def tool_run_command(
             "explanation": explanation,
         }
 
-    if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
+    if verdict == SafetyVerdict.NEEDS_CONFIRMATION and not bypass_confirmation:
         return {
             "status": "needs_confirmation",
+            "action_type": "run_command",
             "command": command,
             "explanation": explanation,
             "safety_tier": 2,
@@ -102,6 +104,7 @@ async def tool_run_command(
     return {
         "status": "executed",
         "command": command,
+        "description": f"Executed command: {command}",
         "output": "\n".join(full_output),
         "cwd": pty.cwd,
     }
@@ -181,6 +184,7 @@ async def tool_move_and_click(
     explanation: str,
     button: str = "left",
     click_type: str = "single",
+    bypass_confirmation: bool = False,
 ) -> dict:
     """Move mouse and click, checking safety gate."""
     safety = get_safety()
@@ -192,7 +196,7 @@ async def tool_move_and_click(
             "reason": f"Click on '{target_description}' was blocked for safety.",
         }
 
-    if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
+    if verdict == SafetyVerdict.NEEDS_CONFIRMATION and not bypass_confirmation:
         return {
             "status": "needs_confirmation",
             "action_type": "move_and_click",
@@ -217,6 +221,9 @@ async def tool_type_text(
     target_description: str,
     safety_tier: int,
     explanation: str,
+    bypass_confirmation: bool = False,
+    x: int | None = None,
+    y: int | None = None,
 ) -> dict:
     """Type text, always requiring confirmation if cautioned."""
     safety = get_safety()
@@ -225,17 +232,18 @@ async def tool_type_text(
     if verdict == SafetyVerdict.BLOCKED:
         return {"status": "blocked", "reason": "Typing here is blocked."}
 
-    if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
+    if verdict == SafetyVerdict.NEEDS_CONFIRMATION and not bypass_confirmation:
         return {
             "status": "needs_confirmation",
             "action_type": "type_text",
             "text": text,
             "target_description": target_description,
             "explanation": explanation,
+            "x": x, "y": y,
         }
 
     sim = get_input_simulator()
-    result = await sim.type_text(text)
+    result = await sim.type_text(text, x=x, y=y)
     return _format_input_result(result, explanation)
 
 
@@ -244,6 +252,9 @@ async def tool_press_key(
     target_description: str,
     safety_tier: int,
     explanation: str,
+    bypass_confirmation: bool = False,
+    x: int | None = None,
+    y: int | None = None,
 ) -> dict:
     """Press keyboard keys."""
     safety = get_safety()
@@ -252,20 +263,21 @@ async def tool_press_key(
     if verdict == SafetyVerdict.BLOCKED:
         return {"status": "blocked", "reason": "Key press blocked."}
 
-    if verdict == SafetyVerdict.NEEDS_CONFIRMATION:
+    if verdict == SafetyVerdict.NEEDS_CONFIRMATION and not bypass_confirmation:
         return {
             "status": "needs_confirmation",
             "action_type": "press_key",
             "keys": keys,
             "target_description": target_description,
             "explanation": explanation,
+            "x": x, "y": y,
         }
 
     sim = get_input_simulator()
     if len(keys) == 1:
-        result = await sim.press_key(keys[0])
+        result = await sim.press_key(keys[0], x=x, y=y)
     else:
-        result = await sim.hotkey(*keys)
+        result = await sim.hotkey(*keys, x=x, y=y)
     return _format_input_result(result, explanation)
 
 
@@ -300,10 +312,22 @@ def tool_explain(topic: str, explanation: str) -> dict:
     return {"status": "explained", "topic": topic, "explanation": explanation}
 
 
-def tool_suggest_fix(command: str, safety_tier: int, explanation: str, risk_warning: str = "") -> dict:
+def tool_suggest_fix(
+    command: str,
+    safety_tier: int,
+    explanation: str,
+    risk_warning: str = "",
+    x: int | None = None,
+    y: int | None = None,
+) -> dict:
+    """Suggest a fix that the agent will type into the user's terminal."""
     return {
         "status": "needs_confirmation",
-        "command": command,
+        "action_type": "type_text",
+        "text": command + "\n",
+        "x": x,
+        "y": y,
+        "target_description": "active terminal",
         "safety_tier": safety_tier,
         "explanation": explanation,
         "risk_warning": risk_warning,

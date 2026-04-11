@@ -135,33 +135,37 @@ class ScreenCapture:
     @staticmethod
     def compress(
         png_bytes: bytes,
-        max_width: int = 1280,
-        jpeg_quality: int = 75,
-    ) -> bytes:
+        max_width: int = 1920,
+        jpeg_quality: int = 85,
+    ) -> tuple[bytes, int, int]:
         """
         Compress a PNG screenshot for the Vision API.
 
-        - Resizes to max_width (preserving aspect ratio)
-        - Converts to JPEG at the given quality
-        - Typical output: 150–300 KB (well under Gemini's 7 MB inline limit)
+        Returns:
+            (bytes, width, height): JPEG bytes and the resolution seen by the AI.
         """
         img = Image.open(io.BytesIO(png_bytes))
-        ratio = max_width / img.width
+        orig_w, orig_h = img.width, img.height
+        
+        ratio = max_width / orig_w
         if ratio < 1:
-            new_size = (max_width, int(img.height * ratio))
-            img = img.resize(new_size, Image.LANCZOS)
+            new_w = max_width
+            new_h = int(orig_h * ratio)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+        else:
+            new_w, new_h = orig_w, orig_h
 
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="JPEG", quality=jpeg_quality)
         compressed = buf.getvalue()
 
         logger.debug(
-            "Compressed: %d bytes → %d bytes (%.0f%% reduction)",
-            len(png_bytes),
+            "Compressed: %dx%d -> %dx%d | %d bytes (%.0f%% reduction)",
+            orig_w, orig_h, new_w, new_h,
             len(compressed),
             (1 - len(compressed) / len(png_bytes)) * 100,
         )
-        return compressed
+        return compressed, new_w, new_h
 
     # ── GNOME Mutter ScreenCast (GNOME Wayland — native, silent) ─────
 
