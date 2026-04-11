@@ -10,7 +10,7 @@ import sys
 import qasync
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QObject
 
 from odus.events import EventType, OdusEvent, get_event_bus
 from odus.ui.ghost_terminal import GhostTerminal
@@ -19,12 +19,13 @@ from odus.ui.mascot import MascotWindow, MascotState
 logger = logging.getLogger(__name__)
 
 
-class OdusApp:
+class OdusApp(QObject):
     """
     Wires the PyQt multiple-window UI and event bus together natively.
     """
 
     def __init__(self) -> None:
+        super().__init__()
         self._bus = get_event_bus()
         self._app = QApplication.instance()
         if not self._app:
@@ -64,9 +65,10 @@ class OdusApp:
         
         asyncio.create_task(self._event_loop())
 
-    def _on_mascot_clicked(self) -> None:
+    @qasync.asyncSlot()
+    async def _on_mascot_clicked(self) -> None:
         """User clicked the Mascot, force a screen capture!"""
-        asyncio.create_task(self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED)))
+        await self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED))
 
     def _toggle_terminal(self) -> None:
         if self._terminal.isVisible():

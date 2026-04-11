@@ -60,19 +60,21 @@ class MascotWindow(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(10, 10, 10, 10)
 
-        # Bubble Container
-        self.container = QWidget()
-        self.container.setObjectName("MascotContainer")
-        self.container.setFixedSize(120, 120)
-        
-        # UI Effects
+        # 1. Outer Container for the Shadow
+        self.shadow_container = QWidget()
+        self.shadow_container.setFixedSize(120, 120)
         self.shadow = QGraphicsDropShadowEffect()
         self.shadow.setBlurRadius(15)
         self.shadow.setColor(QColor(0, 0, 0, 120))
         self.shadow.setOffset(0, 2)
-        self.container.setGraphicsEffect(self.shadow)
+        self.shadow_container.setGraphicsEffect(self.shadow)
         
-        # Opacity Effect for pulsing
+        shadow_layout = QVBoxLayout(self.shadow_container)
+        shadow_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 2. Inner Container for the Pulsing Opacity
+        self.container = QWidget()
+        self.container.setObjectName("MascotContainer")
         self.opacity_effect = QGraphicsOpacityEffect(self.container)
         self.container.setGraphicsEffect(self.opacity_effect)
         
@@ -81,7 +83,7 @@ class MascotWindow(QWidget):
         self.pulse_anim.setStartValue(1.0)
         self.pulse_anim.setKeyValueAt(0.5, 0.4)
         self.pulse_anim.setEndValue(1.0)
-        self.pulse_anim.setLoopCount(-1) # Infinite
+        self.pulse_anim.setLoopCount(-1)
 
         container_layout = QVBoxLayout(self.container)
         container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -92,7 +94,8 @@ class MascotWindow(QWidget):
         self.icon_label.setStyleSheet(f"font-size: 60px; background: transparent;")
         
         container_layout.addWidget(self.icon_label)
-        self.layout.addWidget(self.container)
+        shadow_layout.addWidget(self.container)
+        self.layout.addWidget(self.shadow_container)
 
         self.set_state(MascotState.IDLE)
 

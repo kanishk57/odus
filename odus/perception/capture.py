@@ -170,6 +170,9 @@ class ScreenCapture:
             if os.path.exists(tmp_name):
                 os.remove(tmp_name)
 
+        if not png_bytes:
+            raise RuntimeError("gnome-screenshot produced an empty file")
+
         img = Image.open(io.BytesIO(png_bytes))
         return CaptureResult(
             png_bytes=png_bytes,
