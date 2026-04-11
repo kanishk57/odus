@@ -5,7 +5,7 @@ Mascot State Machine — controls the mascot's visual state and animations in Py
 import logging
 from enum import Enum
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
-from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QTimer
 from PyQt6.QtGui import QColor
 
 from odus.ui.theme import Colors, FontSizes, Radii
@@ -56,6 +56,11 @@ class MascotWindow(QWidget):
             | Qt.WindowType.Tool  # Prevents showing in taskbar optionally
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        # Proactive Top-Level Enforcement for Wayland/GNOME
+        self.top_timer = QTimer(self)
+        self.top_timer.timeout.connect(self.raise_)
+        self.top_timer.start(2000) # Every 2s
 
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(10, 10, 10, 10)

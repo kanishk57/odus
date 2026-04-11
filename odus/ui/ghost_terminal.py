@@ -141,7 +141,7 @@ class GhostTerminal(QWidget):
         escaped_text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         
         html = f"""
-        <div style='margin-bottom: 4px; white-space: pre;'>
+        <div style='margin-bottom: 4px; white-space: pre-wrap;'>
             <span style='color: rgba(255,255,255,0.4); font-size: 11px;'>{timestamp}</span>
             <span style='color: {color}; margin-left: 8px;'>{prefix}</span>
             <span style='color: {color}; font-weight: {weight}; margin-left: 8px;'>{escaped_text}</span>
