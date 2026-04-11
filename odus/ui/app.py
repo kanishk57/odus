@@ -200,6 +200,7 @@ class OdusApp:
 
         elif event.type == EventType.ERROR:
             self._mascot_win.set_state(MascotState.ERROR)
+            self._show_terminal()
             self._terminal.add_error(
                 f"Error: {event.payload.get('message', 'Unknown error')}"
             )

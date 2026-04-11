@@ -89,13 +89,27 @@ class MascotWindow(QWidget):
         # We will set position from app.py
 
     def mousePressEvent(self, event):
-        """Detect clicks to expand UI."""
+        """Detect clicks to expand UI and initiate drag context."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+            self._drag_start_pos = event.globalPosition().toPoint()
+            self._window_start_pos = self.frameGeometry().topLeft()
+            self._is_dragging = False
             
     def mouseMoveEvent(self, event):
-        """Allow dragging if desired, though usually it just floats."""
-        pass
+        """Allow dragging the frameless window naturally across the desktop."""
+        if event.buttons() & Qt.MouseButton.LeftButton and hasattr(self, '_drag_start_pos'):
+            delta = event.globalPosition().toPoint() - self._drag_start_pos
+            if delta.manhattanLength() > 5:
+                # We moved enough to be a drag, not a click
+                self._is_dragging = True
+                self.move(self._window_start_pos + delta)
+
+    def mouseReleaseEvent(self, event):
+        """Trigger the clicked signal if it was a distinct static click."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            if not getattr(self, '_is_dragging', False):
+                self.clicked.emit()
+            self._is_dragging = False
 
     @property
     def state(self) -> MascotState:
