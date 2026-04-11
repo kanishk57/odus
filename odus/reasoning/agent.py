@@ -68,7 +68,8 @@ class Agent:
                 break
 
             if event.type == EventType.CAPTURE_STARTED:
-                await self._handle_capture()
+                query = event.payload.get("query", "") if event.payload else ""
+                await self._handle_capture(query)
 
             elif event.type == EventType.USER_CONFIRMED:
                 await self._handle_user_confirmed(event.payload)
@@ -78,7 +79,7 @@ class Agent:
         self._running = False
         logger.info("Agent loop stopped")
 
-    async def _handle_capture(self) -> None:
+    async def _handle_capture(self, query: str = "") -> None:
         """Full capture → analyze → act pipeline with debounce + guard."""
 
         # ── Guard: skip if already capturing ──
@@ -115,7 +116,7 @@ class Agent:
             await self._bus.emit(OdusEvent(EventType.ANALYSIS_STARTED))
             logger.info("🧠 Analyzing with Gemini Vision...")
 
-            analysis = await self._vision.analyze(compressed)
+            analysis = await self._vision.analyze(compressed, user_context=query)
 
             # 3. DECIDE & ACT
             await self._process_analysis(analysis)

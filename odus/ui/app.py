@@ -74,9 +74,9 @@ class OdusApp(QObject):
 
     def _on_user_query(self, query: str) -> None:
         """User typed something in the chat pill."""
-        # For now, just pipe it to the bus
+        # Trigger an analysis with the user's query as context
         asyncio.ensure_future(
-            self._bus.emit(OdusEvent(EventType.STATUS_UPDATE, {"message": f"User query: {query}"}))
+            self._bus.emit(OdusEvent(EventType.CAPTURE_STARTED, {"query": query}))
         )
 
 
