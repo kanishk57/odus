@@ -53,7 +53,7 @@ class GhostTerminal(QWidget):
         self.output.setObjectName("TerminalOutput")
         font = QFont(Fonts.MONO, FontSizes.SM)
         self.output.setFont(font)
-        self.output.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.output.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
 
         self.layout.addWidget(self.header)
         self.layout.addWidget(self.output)

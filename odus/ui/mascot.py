@@ -4,8 +4,8 @@ Mascot State Machine — controls the mascot's visual state and animations in Py
 
 import logging
 from enum import Enum
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
+from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation
 from PyQt6.QtGui import QColor
 
 from odus.ui.theme import Colors, FontSizes, Radii
@@ -65,12 +65,23 @@ class MascotWindow(QWidget):
         self.container.setObjectName("MascotContainer")
         self.container.setFixedSize(120, 120)
         
-        # Shadow effect
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(0, 0, 0, 120))
-        shadow.setOffset(0, 2)
-        self.container.setGraphicsEffect(shadow)
+        # UI Effects
+        self.shadow = QGraphicsDropShadowEffect()
+        self.shadow.setBlurRadius(15)
+        self.shadow.setColor(QColor(0, 0, 0, 120))
+        self.shadow.setOffset(0, 2)
+        self.container.setGraphicsEffect(self.shadow)
+        
+        # Opacity Effect for pulsing
+        self.opacity_effect = QGraphicsOpacityEffect(self.container)
+        self.container.setGraphicsEffect(self.opacity_effect)
+        
+        self.pulse_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.pulse_anim.setDuration(1200)
+        self.pulse_anim.setStartValue(1.0)
+        self.pulse_anim.setKeyValueAt(0.5, 0.4)
+        self.pulse_anim.setEndValue(1.0)
+        self.pulse_anim.setLoopCount(-1) # Infinite
 
         container_layout = QVBoxLayout(self.container)
         container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -84,9 +95,30 @@ class MascotWindow(QWidget):
         self.layout.addWidget(self.container)
 
         self.set_state(MascotState.IDLE)
+
+    def set_state(self, state: MascotState) -> None:
+        """Update mascot appearance and trigger animations."""
+        self._state = state
+        self.icon_label.setText(MASCOT_DISPLAY[state])
         
-        # Determine position (e.g., bottom right)
-        # We will set position from app.py
+        # Reset animation
+        self.pulse_anim.stop()
+        self.opacity_effect.setOpacity(1.0)
+
+        if state == MascotState.THINKING:
+            self.pulse_anim.start()
+
+        color = MASCOT_COLORS[state]
+        radius = Radii.LG
+        
+        # Update styling
+        self.container.setStyleSheet(f"""
+            QWidget#MascotContainer {{
+                background-color: {Colors.BG_SECONDARY};
+                border: 2px solid {color};
+                border-radius: {radius}px;
+            }}
+        """)
 
     def mousePressEvent(self, event):
         """Detect clicks to expand UI and initiate drag context."""
@@ -114,20 +146,3 @@ class MascotWindow(QWidget):
     @property
     def state(self) -> MascotState:
         return self._state
-
-    def set_state(self, state: MascotState) -> None:
-        """Update mascot appearance."""
-        self._state = state
-        self.icon_label.setText(MASCOT_DISPLAY[state])
-        
-        color = MASCOT_COLORS[state]
-        radius = Radii.LG
-        
-        # Update styling
-        self.container.setStyleSheet(f"""
-            QWidget#MascotContainer {{
-                background-color: {Colors.BG_SECONDARY};
-                border: 2px solid {color};
-                border-radius: {radius}px;
-            }}
-        """)
