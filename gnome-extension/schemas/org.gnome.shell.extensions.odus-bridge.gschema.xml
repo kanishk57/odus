@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.odus-bridge" path="/org/gnome/shell/extensions/odus-bridge/">
+    <key name="odus-activation-shortcut" type="as">
+      <default>['&lt;Super&gt;&lt;Shift&gt;o']</default>
+      <summary>Activation shortcut</summary>
+      <description>The keybinding to toggle the Odus UI.</description>
+    </key>
+  </schema>
+</schemalist>

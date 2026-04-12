@@ -4,10 +4,9 @@ import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
-import St from 'gi://St';
-import PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
+import { OdusPresentation } from './ui/presentation.js';
 
 console.log('[OdusBridge] ESM Module Loaded Successfully');
 
@@ -27,7 +26,7 @@ const DBUS_XML = `
       <arg type="s" name="state" direction="in"/>
     </method>
     <method name="RequestActionApproval">
-      <arg type="s" name="command" direction="in"/>
+      <arg type="s" name="payload" direction="in"/>
       <arg type="b" name="approved" direction="out"/>
     </method>
     <method name="CaptureScreen">
@@ -40,7 +39,6 @@ const DBUS_XML = `
 `;
 
 const ACTIVATION_SHORTCUT_KEY = 'odus-activation-shortcut';
-
 export default class OdusBridge extends Extension {
     constructor(metadata) {
         super(metadata);
@@ -53,7 +51,7 @@ export default class OdusBridge extends Extension {
         this._busNameId = null;
         this._screenshot = null;
         this._settings = null;
-        this._indicator = null;
+        this._ui = new OdusPresentation();
     }
 
     enable() {
@@ -115,22 +113,7 @@ export default class OdusBridge extends Extension {
                 }
             );
 
-            // 6. Add Top Panel Trigger Button
-            this._indicator = new PanelMenu.Button(0.0, 'Odus Trigger', false);
-            
-            // Use a simple symbolic icon for the button
-            let icon = new St.Icon({
-                icon_name: 'face-smile-symbolic',
-                style_class: 'system-status-icon'
-            });
-            this._indicator.add_child(icon);
-            
-            this._indicator.connect('button-press-event', () => {
-                this._onActivationShortcut();
-                return Main.wm.getState() === Shell.ActionMode.OVERVIEW ? false : true;
-            });
-
-            Main.panel.addToStatusArea('odus-bridge', this._indicator);
+            this._ui.createPanelButton(() => this._onActivationShortcut());
             console.log('[OdusBridge] Top panel button added');
 
         } catch (e) {
@@ -141,14 +124,10 @@ export default class OdusBridge extends Extension {
     disable() {
         console.log(`[OdusBridge] Disabling extension`);
 
-        if (this._indicator) {
-            Main.panel.removeFromStatusArea('odus-bridge');
-            this._indicator.destroy();
-            this._indicator = null;
-        }
+        this._ui.destroyPanelButton();
+        this._ui.hideThinking();
  
-         Main.wm.removeKeybinding(ACTIVATION_SHORTCUT_KEY);
-
+        Main.wm.removeKeybinding(ACTIVATION_SHORTCUT_KEY);
 
         if (this._dbusConnection && this._dbusRegistrationId) {
             this._dbusConnection.unregister_object(this._dbusRegistrationId);
@@ -169,6 +148,7 @@ export default class OdusBridge extends Extension {
 
     _onActivationShortcut() {
         console.log('[OdusBridge] Activation shortcut triggered');
+        this._ui.showThinking();
 
         if (!this._dbusConnection)
             return;
@@ -315,70 +295,50 @@ export default class OdusBridge extends Extension {
         console.log(`[OdusBridge] Mascot state requested: ${state}`);
     }
 
-    RequestActionApproval(command) {
-        console.log(`[OdusBridge] Requesting approval for: ${command}`);
+    RequestActionApproval(payload) {
+        let parsed = {};
 
-        const modal = new St.BoxLayout({
-            style_class: 'odus-modal',
-            vertical: true,
-            reactive: true,
-            x_expand: true,
-            y_expand: true,
-            style: 'background-color: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; border: 2px solid #ff7f50;'
-        });
+        try {
+            parsed = JSON.parse(payload);
+        } catch (e) {
+            console.error(`[OdusBridge] Invalid approval payload: ${e.message}`);
+        }
 
-        const label = new St.Label({
-            text: `Odus wants to execute:\n\n${command}\n\nAllow?`,
-            style: 'color: white; font-size: 16px; margin-bottom: 20px; text-align: center;'
-        });
-        modal.add_child(label);
+        const summary = parsed.summary || '';
+        const explanation = parsed.explanation || '';
+        const followUp = parsed.follow_up || '';
+        const command = parsed.command || '';
+        const kind = parsed.kind || (command ? 'advice' : 'info');
+        const retryAfter = parsed.retry_after;
 
-        const buttonBox = new St.BoxLayout({
-            x_align: Clutter.ActorAlign.CENTER
-        });
+        console.log(`[OdusBridge] Requesting advice modal for: ${command || 'follow-up chat'}`);
 
-        const allowButton = new St.Button({
-            label: 'Allow',
-            style_class: 'button',
-            style: 'background-color: #ff7f50; color: white; padding: 10px 20px; margin-right: 10px; border-radius: 5px;'
-        });
-        
-        const denyButton = new St.Button({
-            label: 'Deny',
-            style_class: 'button',
-            style: 'background-color: #333; color: white; padding: 10px 20px; border-radius: 5px;'
-        });
-
-        buttonBox.add_child(allowButton);
-        buttonBox.add_child(denyButton);
-        modal.add_child(buttonBox);
-
-        Main.layoutManager.addChrome(modal, {
-            affectsInputRegion: true,
-            x_fill: false,
-            y_fill: false
-        });
-        
-        const constraint = new Clutter.AlignConstraint({
-            source: Main.layoutManager.uiGroup,
-            align_axis: Clutter.AlignAxis.BOTH,
-            factor: 0.5
-        });
-        modal.add_constraint(constraint);
-
-        Main.pushModal(modal);
-
-        return new Promise(resolve => {
-            const cleanup = approved => {
-                Main.popModal(modal);
-                Main.layoutManager.removeChrome(modal);
-                modal.destroy();
-                resolve(approved);
-            };
-
-            allowButton.connect('clicked', () => cleanup(true));
-            denyButton.connect('clicked', () => cleanup(false));
-        });
+        return this._ui.showAdviceModal(
+            {
+                summary,
+                explanation,
+                follow_up: followUp,
+                command,
+                kind,
+                retry_after: retryAfter,
+            },
+            {
+                onAskFollowUp: async query => {
+                    await Gio.DBus.session.call(
+                        'org.gnome.Odus.Control',
+                        '/org/gnome/Odus/Control',
+                        'org.gnome.Odus.Control',
+                        'SubmitQuery',
+                        new GLib.Variant('(s)', [query]),
+                        null,
+                        Gio.DBusCallFlags.NONE,
+                        -1,
+                        null
+                    );
+                    console.log(`[OdusBridge] Follow-up query sent: ${query}`);
+                },
+            }
+        );
     }
 
     async CaptureScreen() {

@@ -1,0 +1,9 @@
+{
+  "name": "Odus Bridge",
+  "description": "Wayland-native bridge for the Odus AI mentor",
+  "uuid": "odus-bridge@visionnestllc.com",
+  "shell-version": ["46", "47", "48"],
+  "url": "https://github.com/armaan/odus",
+  "version": 1,
+  "settings-schema": "org.gnome.shell.extensions.odus-bridge"
+}
