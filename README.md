@@ -23,27 +23,45 @@ Press Hotkey → Screen Captured → Gemini Analyzes → One-Click Fix
 
 **Wayland users:** Note that `grim` is prioritized for high-performance captures. `gnome-screenshot` is mapped as a secondary graphical fallback.
 
-## Setup
+## Setup & Launch
 
+Odus provides automated scripts to handle dependencies and environment setup.
+
+### 1. Standard Installation
 ```bash
-# 1. Clone the repo
-git clone https://github.com/kanishk57/odus.git
-cd odus
+git clone https://github.com/kanishk57/odus.git && cd odus
 
-# 2. Create an isolated virtual dependency graph
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 3. Install core dependencies
-pip install -e ".[dev]"
-
-# 4. Integrate your GenAI Auth token
+# Create .env and add your GEMINI_API_KEY
 cp .env.example .env
-nano .env                      # paste your GEMINI_API_KEY
+nano .env
 
-# 5. Launch the Orchestrator
-python -m odus.main
+# Launch the Desktop GUI automatically
+./run.sh
 ```
+
+### 2. GNOME Native Integration (Recommended)
+For a seamless Wayland experience with system-level overlays:
+```bash
+./deploy.sh
+```
+*Note: You may need to log out and log back in after the first deployment to enable the shell extension.*
+
+## Interface Modes
+
+Odus offers two distinct ways to interact with the AI assistant.
+
+### 1. Desktop GUI App (Qt)
+A standalone application with a glassmorphic chat interface. Works globally on X11/Wayland.
+- **Launch**: `./run.sh`
+- **Best for**: Non-GNOME environments or standard windowed use.
+
+### 2. GNOME Shell Extension (Native)
+A high-performance bridge integrated into the compositor via GJS. 
+- **Setup**: Run `./deploy.sh` to install the extension and start the background daemon.
+- **Service Management**:
+    - **View Logs**: `journalctl --user -u odus -f`
+    - **Restart Service**: `systemctl --user restart odus`
+- **Key Features**: native advice modals, zero-privilege input, and interactive shell follow-ups.
 
 ## Architecture & Internals
 
@@ -52,9 +70,11 @@ Odus relies on a decoupled, microservice-inspired architecture pattern powered b
 ```text
 odus/
 ├── perception/    # X11 (mss) + Wayland (grim/gnome-s) captures | pynput & evdev hooks
-├── reasoning/     # Tool Calling schemas | Flash → Pro Escalation | Tenacity Rate limit backoffs
-├── action/        # Subprocess execution wrapping | 10k/5k trunacting limits | Safety gates
-└── ui/            # PyQt6 app | Chat Interface | Mascot Sprite State Machine | async streaming
+├── reasoning/     # Tool Calling schemas | Flash → Pro Escalation | Gemini 429 backoffs
+├── action/        # Subprocess execution wrapping | Safety gates | DBus client
+├── ui/            # PyQt6 app | Chat Interface | Mascot Sprite State Machine
+└── ui_v2/         # Next-gen Sidebar UI & Editorial components
+gnome-extension/   # GJS Bridge | GNOME Advice Modals | D-Bus interface
 ```
 
 ### Next-Gen Tech Stack
