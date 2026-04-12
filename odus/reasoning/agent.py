@@ -215,16 +215,14 @@ class Agent:
             action["action_type"] = "run_command"
 
         logger.info("User confirmed action: %s", action_type)
-        # Note: PlanExecutor already emits EXECUTING if this is part of a plan.
-        # Direct confirmation still needs it.
-        if not self._executor.paused_context:
-            await self._bus.emit(OdusEvent(EventType.INPUT_ACTION_EXECUTING, {
-                "action_type": action_type,
-                "description": explanation,
-                "x": action.get("x"),
-                "y": action.get("y"),
-            }))
-            await asyncio.sleep(0.4)
+        # Always emit so the window hides during input actions
+        await self._bus.emit(OdusEvent(EventType.INPUT_ACTION_EXECUTING, {
+            "action_type": action_type,
+            "description": explanation,
+            "x": action.get("x"),
+            "y": action.get("y"),
+        }))
+        await asyncio.sleep(0.4)
 
         try:
             result = await self._executor.execute_confirmed_input(action)

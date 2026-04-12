@@ -54,6 +54,9 @@ class VisionAnalyzer:
         result = await analyzer.analyze(jpeg_bytes, "I see an error in my terminal")
     """
 
+    # Maximum conversation turns to keep in memory
+    _MAX_HISTORY = 10
+
     def __init__(self) -> None:
         api_key = os.environ.get("GEMINI_API_KEY", "")
         if not api_key:
@@ -65,6 +68,9 @@ class VisionAnalyzer:
         self._client = genai.Client(api_key=api_key)
         self._model_fast = os.environ.get("ODUS_MODEL_FAST", "gemini-2.5-flash")
         self._model_deep = os.environ.get("ODUS_MODEL_DEEP", "gemini-2.5-pro")
+
+        # In-memory conversation history (auto-clears on restart)
+        self._history: list[dict[str, str]] = []
 
         logger.info(
             "VisionAnalyzer initialized | fast=%s | deep=%s",
@@ -100,12 +106,22 @@ class VisionAnalyzer:
         
         if image_width and image_height:
             prompt_text += f"\n\n## Screenshot Resolution\nResolution: {image_width}x{image_height}"
-            
+
+        # Include conversation history for context
+        if self._history:
+            prompt_text += "\n\n## Conversation History\n"
+            prompt_text += "The following is the history of our conversation so far. "
+            prompt_text += "Use this context to understand follow-up questions and maintain continuity.\n"
+            for turn in self._history:
+                prompt_text += f"\n**User:** {turn['user']}\n"
+                prompt_text += f"**Odus:** {turn['assistant']}\n"
+
         if user_context:
-            prompt_text += f"\n\n## User Context\n{user_context}"
+            prompt_text += f"\n\n## Current User Query\n{user_context}"
         prompt_text += (
             "\n\nAnalyze the attached screenshot. "
-            "Respond ONLY with the JSON object specified in the output format."
+            "Respond ONLY with the JSON object specified in the output format. "
+            "Take the conversation history into account when answering."
         )
 
         try:
@@ -120,7 +136,19 @@ class VisionAnalyzer:
             raw_text = response.text
             logger.debug("Raw API response: %s", raw_text[:500])
 
-            return self._parse_response(raw_text)
+            result = self._parse_response(raw_text)
+
+            # Save this exchange to history
+            self._history.append({
+                "user": user_context or "[screenshot analysis]",
+                "assistant": result.summary + " — " + result.explanation_for_user,
+            })
+            # Trim to max history size
+            if len(self._history) > self._MAX_HISTORY:
+                self._history = self._history[-self._MAX_HISTORY:]
+
+            logger.info("Conversation history: %d turns", len(self._history))
+            return result
 
         except Exception as e:
             logger.error("Vision API call failed: %s", e)

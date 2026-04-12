@@ -59,7 +59,6 @@ class OdusAppV2(QObject):
 
         # Welcome
         self._window.chat_history.add_message("Hey there! I'm Odus 🦉 — your Linux mentor. How can I help you today?", is_ai=True)
-        self._window.chat_history.add_system_log("Ready — press Ctrl+Shift+O to capture.")
 
         asyncio.create_task(self._event_loop())
 
@@ -199,7 +198,6 @@ class OdusAppV2(QObject):
         )
 
     async def _on_execution_started(self, event: OdusEvent) -> None:
-        self._window.terminal.setVisible(True)
         self._window.chat_history.add_system_log("⚡ Executing...")
 
     async def _on_execution_done(self, event: OdusEvent) -> None:
@@ -208,7 +206,6 @@ class OdusAppV2(QObject):
 
         if status == "executed":
             rc = result.get("return_code", -1)
-            self._window.terminal.setVisible(True)
             if rc == 0:
                 self._window.set_mascot_state("success")
                 self._window.terminal.add_success("Command succeeded")
@@ -229,11 +226,15 @@ class OdusAppV2(QObject):
 
     async def _on_agent_plan_created(self, event: OdusEvent) -> None:
         payload = event.payload
+        explanation = payload.get("explanation", payload.get("summary", ""))
         self._window.chat_history.add_action_plan(
-            summary=payload.get("explanation", payload.get("summary", "")),
+            summary=explanation,
             steps=payload.get("plan", []),
             needs_confirmation=payload.get("needs_confirmation", False),
         )
+        # Show the AI explanation after the plan steps
+        if explanation:
+            self._window.chat_history.add_message(explanation, is_ai=True)
 
     async def _on_agent_plan_confirmed(self, event: OdusEvent) -> None:
         self._window.chat_history.add_system_log("Implementation plan authorized.", color=Colors.SUCCESS)
@@ -244,7 +245,28 @@ class OdusAppV2(QObject):
 
     async def _on_agent_step_done(self, event: OdusEvent) -> None:
         step = event.payload.get("step", 0)
+        result = event.payload.get("result", {})
         self._window.chat_history.update_action_step(step, "done")
+
+        # Display step result content in chat
+        status = result.get("status", "")
+        explanation = result.get("explanation", "")
+
+        if status == "explained" and explanation:
+            self._window.chat_history.add_message(explanation, is_ai=True)
+        elif status == "highlight" and explanation:
+            self._window.chat_history.add_system_log(explanation)
+        elif status == "executed":
+            if explanation:
+                self._window.chat_history.add_message(explanation, is_ai=True)
+            output = result.get("output", "")
+            if output:
+                # Show command output as a system log (truncated if very long)
+                display = output[:500] + "..." if len(output) > 500 else output
+                self._window.chat_history.add_system_log(f"Output: {display}")
+        elif status == "failed":
+            error = result.get("error", "Step failed")
+            self._window.chat_history.add_system_log(f"✗ {error}", color=Colors.ERROR)
 
     async def _on_agent_plan_done(self, event: OdusEvent) -> None:
         total = event.payload.get("total_steps", 0)
@@ -258,8 +280,8 @@ class OdusAppV2(QObject):
 
         # Show on overlay
         if action.get("x") is not None and action.get("y") is not None:
-            self._overlay.clear()
-            self._overlay.add_action_marker(
+            self._overlay.dismiss()
+            self._overlay.show_highlight(
                 action.get("x"), action.get("y"), 
                 action.get("width", 20), action.get("height", 20),
                 label=action_type
@@ -318,17 +340,17 @@ class OdusAppV2(QObject):
 
     async def _on_terminal_output_line(self, event: OdusEvent) -> None:
         line = event.payload.get("line", "")
-        self._window.terminal.setVisible(True)
+        # terminal stays hidden — output goes to chat instead
         self._window.terminal.add_stream_line(line)
 
     async def _on_terminal_command_started(self, event: OdusEvent) -> None:
         cmd = event.payload.get("command", "")
-        self._window.terminal.setVisible(True)
+        # terminal stays hidden — output goes to chat instead
         self._window.terminal.add_command(cmd)
 
     async def _on_terminal_command_done(self, event: OdusEvent) -> None:
         rc = event.payload.get("exit_code", 0)
-        self._window.terminal.setVisible(True)
+        # terminal stays hidden — output goes to chat instead
         if rc == 0:
             self._window.set_mascot_state("success")
             self._window.terminal.add_success("Command finished")

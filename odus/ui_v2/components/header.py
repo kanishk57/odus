@@ -28,7 +28,7 @@ class SidebarHeaderV2(QFrame):
         self.setObjectName("SidebarHeader")
         
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(Spacing.LG, Spacing.XL, Spacing.LG, Spacing.MD)
+        self._layout.setContentsMargins(Spacing.LG, Spacing.SM, Spacing.LG, Spacing.MD)
         self._layout.setSpacing(Spacing.SM)
 
         # Mascot + Actions Row
@@ -89,26 +89,19 @@ class SidebarHeaderV2(QFrame):
         """)
         self._layout.addWidget(self.title)
 
-        # Subtitle / Status
-        self.subtitle = QLabel("THE SHADOW CONSOLE")
-        self.subtitle.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY};
-            font-family: '{Fonts.HEADLINE}';
-            font-size: {FontSizes.XS}px;
-            letter-spacing: 1px;
-        """)
-        self._layout.addWidget(self.subtitle)
-
         self._apply_style()
 
     def _apply_style(self):
         self.setStyleSheet(f"""
             QFrame#SidebarHeader {{
-                background-color: transparent;
+                background-color: {Colors.BG_LEVEL_1};
+                border-top-left-radius: {Radii.LG}px;
+                border-top-right-radius: {Radii.LG}px;
+                border-bottom: 1px solid {Colors.BORDER_GHOST};
             }}
             QPushButton#MascotBtn {{
                 background-color: {Colors.BG_LEVEL_1};
-                border-radius: {Radii.MD}px;
+                border-radius: 24px;
                 border: 1px solid {Colors.BORDER_GHOST};
             }}
             QPushButton#MascotBtn:hover {{
@@ -116,21 +109,25 @@ class SidebarHeaderV2(QFrame):
                 border-color: {Colors.PRIMARY};
             }}
             QPushButton#CloseBtn {{
-                background-color: transparent;
+                background-color: {Colors.BG_LEVEL_1};
                 color: {Colors.TEXT_SECONDARY};
                 font-size: 24px;
-                border: none;
+                border: 1px solid {Colors.BORDER_GHOST};
+                border-radius: 16px;
             }}
             QPushButton#CloseBtn:hover {{
                 color: {Colors.TEXT_PRIMARY};
+                background-color: {Colors.BG_LEVEL_2};
             }}
             QPushButton#QuitBtn {{
-                background-color: transparent;
+                background-color: {Colors.BG_LEVEL_1};
                 color: {Colors.TEXT_SECONDARY};
                 font-size: 18px;
-                border: none;
+                border: 1px solid {Colors.BORDER_GHOST};
+                border-radius: 16px;
             }}
             QPushButton#QuitBtn:hover {{
                 color: {Colors.ERROR};
+                background-color: {Colors.BG_LEVEL_2};
             }}
         """)

@@ -41,8 +41,8 @@ class ChatHistoryV2(QScrollArea):
         self.content = QWidget()
         self.content.setObjectName("ChatContent")
         self._layout = QVBoxLayout(self.content)
-        self._layout.setContentsMargins(Spacing.MD, Spacing.MD, Spacing.MD, Spacing.MD)
-        self._layout.setSpacing(Spacing.MD) # Consistent gap between elements
+        self._layout.setContentsMargins(Spacing.MD, Spacing.SM, Spacing.MD, Spacing.MD)
+        self._layout.setSpacing(Spacing.SM)  # Tighter spacing
         self._layout.addStretch(1) # Start messages from bottom
 
         self.setWidget(self.content)
@@ -58,18 +58,35 @@ class ChatHistoryV2(QScrollArea):
         self._scroll_to_bottom()
 
     def add_system_log(self, text: str, color: str = None):
-        """Minimalist log entry."""
+        """Subtle, dimmed log entry that doesn't dominate the chat."""
         if not text:
             return
-        log_label = QLabel(f"  › {text}")
+        log_frame = QFrame()
+        log_frame.setObjectName("SystemLog")
+        log_layout = QHBoxLayout(log_frame)
+        log_layout.setContentsMargins(8, 2, 8, 2)
+        log_layout.setSpacing(6)
+
+        # Dim dot indicator
+        dot = QLabel("›")
+        dot.setFixedWidth(10)
+        dot.setStyleSheet(f"color: {color or Colors.TEXT_SECONDARY}; font-size: 10px; opacity: 0.5; background: transparent;")
+        log_layout.addWidget(dot)
+
+        log_label = QLabel(text)
         log_label.setWordWrap(True)
         log_label.setStyleSheet(f"""
             color: {color or Colors.TEXT_SECONDARY};
             font-family: '{Fonts.MONO}';
-            font-size: {FontSizes.XS}px;
-            padding: 2px 8px;
+            font-size: {FontSizes.XS - 1}px;
+            background: transparent;
+            opacity: 0.7;
         """)
-        self._layout.insertWidget(self._layout.count() - 1, log_label)
+        log_layout.addWidget(log_label, stretch=1)
+
+        log_frame.setStyleSheet("background: transparent; border: none;")
+        log_frame.setMaximumHeight(24)
+        self._layout.insertWidget(self._layout.count() - 1, log_frame)
         self._scroll_to_bottom()
 
     def add_permission_card(
@@ -88,8 +105,7 @@ class ChatHistoryV2(QScrollArea):
         return card
 
     def add_action_plan(self, summary: str, steps: list[dict], needs_confirmation: bool = False) -> None:
-        """Display a multi-step action plan."""
-        self.add_message(summary, is_ai=True)
+        """Display a multi-step action plan — steps first, summary after."""
         self._step_widgets = {}
         
         plan_container = QWidget()

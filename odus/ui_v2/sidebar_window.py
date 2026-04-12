@@ -62,18 +62,15 @@ class SidebarWindowV2(QMainWindow):
         self.header.close_clicked.connect(self.collapse)
         self.header.quit_requested.connect(self._quit_app)
         
-        # Content Area (Merged Chat and Terminal)
+        # Content Area
         self.chat_history = ChatHistoryV2()
-        self.terminal = GhostTerminalV2()
-        # Set a reasonable height for terminal when merged
-        self.terminal.setFixedHeight(200) 
-        self.terminal.setVisible(False) # Hide until needed
+        self.terminal = GhostTerminalV2()  # kept for API compat, not shown
+        self.terminal.setVisible(False)
 
         self.input_bar = InputBarV2()
 
         self.panel_layout.addWidget(self.header)
         self.panel_layout.addWidget(self.chat_history, stretch=1)
-        self.panel_layout.addWidget(self.terminal)
         self.panel_layout.addWidget(self.input_bar)
 
         # The Trigger Node (Mascot Node)
@@ -188,7 +185,8 @@ class SidebarWindowV2(QMainWindow):
         self.panel.setStyleSheet(f"""
             QFrame#SidebarPanel {{
                 background-color: {Colors.BG_BASE};
-                border-left: 1px solid {Colors.BORDER_GHOST};
+                border: 1px solid {Colors.BORDER_GHOST};
+                border-radius: {Radii.LG}px;
             }}
         """)
         

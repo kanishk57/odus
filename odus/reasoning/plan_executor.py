@@ -225,7 +225,9 @@ class PlanExecutor:
         elif action_type == "read_file":
             return await tool_read_file(params.get("path", ""), description)
         elif action_type == "explain":
-            return tool_explain(params.get("topic", ""), description)
+            # Prefer params.explanation (detailed AI text) over step description (short label)
+            detailed = params.get("explanation", "") or description
+            return tool_explain(params.get("topic", ""), detailed)
         elif action_type == "suggest_fix":
             return tool_suggest_fix(
                 command=params.get("command", ""),

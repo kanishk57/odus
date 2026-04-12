@@ -1,5 +1,5 @@
 """
-Message Bubble (v2) — Editorial Obsidian Style.
+Message Bubble (v2) — Polished chat cards.
 """
 
 from __future__ import annotations
@@ -8,78 +8,109 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGraphicsOpacityEffect, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QFont
 
 from odus.ui_v2.theme import (
     Colors, FontSizes, Radii, Spacing, Fonts
 )
 
+
 class MessageBubbleV2(QFrame):
-    """A technical, minimal message bubble for the sidebar."""
+    """
+    Polished message bubble with visual distinction between AI and user.
+    AI: tinted card with left accent bar.
+    User: right-aligned rounded bubble.
+    """
 
     def __init__(self, text: str, is_ai: bool = True):
         super().__init__()
+        self.setObjectName("MsgBubble")
 
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(Spacing.MD, Spacing.SM, Spacing.MD, Spacing.SM)
-        self._layout.setSpacing(Spacing.XS)
+        self._layout.setContentsMargins(0, Spacing.XS, 0, Spacing.XS)
+        self._layout.setSpacing(0)
 
-        # Container for the bubble to handle max-width simulation
-        self.container = QFrame()
-        self.container_layout = QVBoxLayout(self.container)
-        self.container_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.label = QLabel(text)
-        self.label.setWordWrap(True)
-        self.label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        
-        # Max width simulation: we don't strictly have max-width in Qt layouts easily
-        # but we can use stretch in the parent layout.
-        
         if is_ai:
-            # Assistant Bubble: Transparent background, left-aligned
-            self.label.setStyleSheet(f"""
-                color: {Colors.TEXT_PRIMARY};
-                font-family: '{Fonts.BODY}';
-                font-size: {FontSizes.MD}px;
-                line-height: 1.5;
-                background-color: transparent;
-            """)
-            self._layout.addWidget(self.label)
-            self._layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-            self.setStyleSheet("background-color: transparent; border: none;")
+            self._build_ai_bubble(text)
         else:
-            # User Bubble: Nesting Level 2 background, right-aligned
-            self.label.setStyleSheet(f"""
-                color: {Colors.TEXT_PRIMARY};
-                font-family: '{Fonts.BODY}';
-                font-size: {FontSizes.MD}px;
-                line-height: 1.5;
-                background-color: transparent;
-            """)
-            
-            self.bubble_frame = QFrame()
-            self.bubble_frame.setObjectName("UserBubbleFrame")
-            bubble_layout = QVBoxLayout(self.bubble_frame)
-            bubble_layout.setContentsMargins(12, 8, 12, 8)
-            bubble_layout.addWidget(self.label)
-            
-            self.bubble_frame.setStyleSheet(f"""
-                QFrame#UserBubbleFrame {{
-                    background-color: {Colors.BG_LEVEL_2};
-                    border-radius: {Radii.MD}px;
-                    border: 1px solid {Colors.BORDER_GHOST};
-                }}
-            """)
-            
-            # Use a horizontal layout to push the bubble to the right
-            row = QHBoxLayout()
-            row.addStretch(1)
-            row.addWidget(self.bubble_frame, stretch=4) # Simulate ~80% max width
-            self._layout.addLayout(row)
-            self._layout.setAlignment(Qt.AlignmentFlag.AlignRight)
+            self._build_user_bubble(text)
 
-        # Entrance animation
         self._animate_entrance()
+
+    def _build_ai_bubble(self, text: str):
+        """AI message: accent-bar card with tinted background."""
+        card = QFrame()
+        card.setObjectName("AiCard")
+        card_layout = QHBoxLayout(card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+
+        # Left accent bar
+        accent = QFrame()
+        accent.setFixedWidth(3)
+        accent.setStyleSheet(f"""
+            background-color: {Colors.PRIMARY};
+            border-top-left-radius: 2px;
+            border-bottom-left-radius: 2px;
+        """)
+        card_layout.addWidget(accent)
+
+        # Message text
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setFont(QFont(Fonts.BODY, FontSizes.MD))
+        label.setStyleSheet(f"""
+            color: {Colors.TEXT_PRIMARY};
+            padding: 12px 16px;
+            background: transparent;
+            line-height: 1.6;
+        """)
+        card_layout.addWidget(label, stretch=1)
+
+        card.setStyleSheet(f"""
+            QFrame#AiCard {{
+                background-color: {Colors.BG_LEVEL_1};
+                border-radius: {Radii.LG}px;
+                border: 1px solid {Colors.BORDER_SUBTLE};
+            }}
+        """)
+
+        self._layout.addWidget(card)
+        self.setStyleSheet("background-color: transparent; border: none;")
+
+    def _build_user_bubble(self, text: str):
+        """User message: right-aligned rounded bubble."""
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setFont(QFont(Fonts.BODY, FontSizes.MD))
+        label.setStyleSheet(f"""
+            color: {Colors.TEXT_PRIMARY};
+            background: transparent;
+            line-height: 1.6;
+        """)
+
+        bubble = QFrame()
+        bubble.setObjectName("UserBubble")
+        bubble_layout = QVBoxLayout(bubble)
+        bubble_layout.setContentsMargins(16, 10, 16, 10)
+        bubble_layout.addWidget(label)
+
+        bubble.setStyleSheet(f"""
+            QFrame#UserBubble {{
+                background-color: {Colors.BG_LEVEL_2};
+                border-radius: {Radii.LG}px;
+                border: 1px solid {Colors.BORDER_GHOST};
+            }}
+        """)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch(1)
+        row.addWidget(bubble, stretch=4)
+        self._layout.addLayout(row)
+        self.setStyleSheet("background-color: transparent; border: none;")
 
     def _animate_entrance(self):
         """Fade-in entrance."""

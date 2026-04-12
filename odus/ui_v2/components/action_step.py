@@ -102,8 +102,9 @@ class ActionStepWidgetV2(QFrame):
     def _apply_style(self) -> None:
         self.setStyleSheet(f"""
             QFrame#ActionStep {{
-                background-color: {Colors.BG_LEVEL_1};
-                border-radius: {Radii.SM}px;
+                background-color: {Colors.BG_LEVEL_2};
+                border-radius: {Radii.LG}px;
                 border: 1px solid {Colors.BORDER_GHOST};
+                padding: 2px 4px;
             }}
         """)
