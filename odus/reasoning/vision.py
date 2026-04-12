@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 
 from google import genai
@@ -152,12 +153,39 @@ class VisionAnalyzer:
 
         except Exception as e:
             logger.error("Vision API call failed: %s", e)
+            message = str(e)
+            retry_after = self._extract_retry_delay_seconds(message)
+
+            if retry_after is not None or "RESOURCE_EXHAUSTED" in message or "429" in message:
+                retry_text = f"Retry in {retry_after:.0f}s." if retry_after is not None else "Retry later."
+                return AnalysisResult(
+                    summary="Gemini rate limit reached",
+                    explanation_for_user=(
+                        f"Gemini is temporarily rate limited. {retry_text}"
+                        " Check your API key or wait for the quota window to reset."
+                    ),
+                    follow_up_hint="Try again after the retry window or update the Gemini API key.",
+                    confidence=0.0,
+                    raw_response=message,
+                )
+
             return AnalysisResult(
                 summary="Analysis failed",
-                explanation_for_user=f"I couldn't analyze the screenshot: {e}",
+                explanation_for_user=f"I couldn't analyze the screenshot: {message}",
+                follow_up_hint="Try again after checking the API key, network connection, or the current screenshot.",
                 confidence=0.0,
-                raw_response=str(e),
+                raw_response=message,
             )
+
+    def _extract_retry_delay_seconds(self, error_message: str) -> float | None:
+        match = re.search(r'retry in ([0-9.]+)s', error_message, re.IGNORECASE)
+        if not match:
+            return None
+
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
 
     def _parse_response(self, raw_text: str) -> AnalysisResult:
         """Parse the JSON response from Gemini into an AnalysisResult."""

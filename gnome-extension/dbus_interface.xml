@@ -1,0 +1,24 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.gnome.Odus">
+    <method name="RegisterClient">
+      <arg type="s" name="token" direction="in"/>
+      <arg type="b" name="success" direction="out"/>
+    </method>
+    <method name="InjectKeystroke">
+      <arg type="s" name="keysym" direction="in"/>
+    </method>
+    <method name="SetMascotState">
+      <arg type="s" name="state" direction="in"/>
+    </method>
+    <method name="CaptureScreen">
+      <annotation name="org.gtk.GDBus.C.UnixFD" value="true"/>
+      <arg type="h" name="fd" direction="out"/>
+    </method>
+    <method name="RequestActionApproval">
+      <arg type="s" name="command" direction="in"/>
+      <arg type="b" name="approved" direction="out"/>
+    </method>
+  </interface>
+</node>

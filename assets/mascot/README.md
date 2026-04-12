@@ -1,12 +1,11 @@
 # Mascot Assets
 
-This directory will contain mascot sprite images for each state:
+This directory contains the mascot sprite images used for each assistant state:
 
-- `idle.png` — Default resting state
-- `thinking.png` — Analyzing screenshot  
-- `success.png` — Fix found / command succeeded
-- `error.png` — Something went wrong
-- `warning.png` — Needs user attention
+- `mascot_idle.png` — Default resting state
+- `mascot_thinking.png` — Analyzing screenshot  
+- `mascot_success.png` — Fix found / command succeeded
+- `mascot_error.png` — Something went wrong
+- `mascot_warning.png` — Needs user attention
 
-Currently using emoji placeholders in the UI.
-Replace with actual sprites when ready.
+The UI automatically cycles through these sprites based on the internal event bridge state.
