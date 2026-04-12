@@ -7,6 +7,7 @@ Routes requests to the appropriate modular backend (ydotool, xdotool, pyautogui)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil

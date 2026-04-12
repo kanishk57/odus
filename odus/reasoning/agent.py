@@ -85,9 +85,16 @@ class Agent:
         self._last_capture_time = now
 
         try:
+            # Hide the Odus window so the AI doesn't see its own UI
+            await self._bus.emit(OdusEvent(EventType.WINDOW_HIDE_FOR_CAPTURE))
+            await asyncio.sleep(0.5)  # Let the compositor process the hide
+
             logger.info("📸 Capturing screen...")
             result = await self._capture.grab_full_screen()
             compressed, ai_w, ai_h = self._capture.compress(result.png_bytes)
+
+            # Restore the Odus window immediately after capture
+            await self._bus.emit(OdusEvent(EventType.WINDOW_SHOW_AFTER_CAPTURE))
 
             await self._bus.emit(OdusEvent(EventType.CAPTURE_DONE, {
                 "width": result.width, "height": result.height, "size_bytes": len(compressed),
@@ -109,6 +116,8 @@ class Agent:
 
         except Exception as e:
             logger.error("Pipeline error: %s", e, exc_info=True)
+            # Always restore the window even on failure
+            await self._bus.emit(OdusEvent(EventType.WINDOW_SHOW_AFTER_CAPTURE))
             await self._bus.emit(OdusEvent(EventType.ERROR, {"message": str(e)}))
         finally:
             self._capturing = False

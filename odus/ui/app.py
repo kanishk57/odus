@@ -155,6 +155,8 @@ class OdusApp(QObject):
             EventType.TERMINAL_COMMAND_STARTED: self._on_terminal_command_started,
             EventType.TERMINAL_COMMAND_DONE: self._on_terminal_command_done,
             EventType.TERMINAL_CWD_CHANGED: self._on_terminal_cwd_changed,
+            EventType.WINDOW_HIDE_FOR_CAPTURE: self._on_window_hide_for_capture,
+            EventType.WINDOW_SHOW_AFTER_CAPTURE: self._on_window_show_after_capture,
             EventType.ERROR: self._on_error,
             EventType.STATUS_UPDATE: self._on_status_update,
         }
@@ -316,27 +318,20 @@ class OdusApp(QObject):
             color=Colors.ACCENT,
         )
         
-        # 👻 Ghost Mode: Make Odus non-interactive so clicks pass through to targets
-        try:
-            self._window.setWindowOpacity(0.4)
-        except Exception:
-            # Some Wayland plugins don't support opacity changes
-            pass
-        self._window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        
-        # Show Ghost Cursor on overlay
-        x = event.payload.get("x")
-        y = event.payload.get("y")
-        is_kb = action_type in ("type_text", "press_key", "hotkey")
-        self._overlay.set_ghost_cursor(x, y, is_typing=is_kb)
+        # 👻 Ghost Mode: Hide Odus entirely so ydotool clicks reach the real target.
+        # WA_TransparentForMouseEvents only blocks Qt input events — ydotool
+        # injects through /dev/uinput, which the Wayland compositor still
+        # delivers to whatever surface is under the cursor.
+        self._window.hide()
+        self._overlay.hide()
 
     async def _on_input_action_done(self, event: OdusEvent) -> None:
         # Restore window from Ghost Mode
-        self._window.setWindowOpacity(1.0)
-        self._window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
         
         self._overlay.dismiss()
-        self._overlay.set_ghost_cursor(None, None)
         
         self._window.mascot.set_state(MascotState.SUCCESS)
         result = event.payload.get("result", {})
@@ -347,11 +342,11 @@ class OdusApp(QObject):
 
     async def _on_input_action_failed(self, event: OdusEvent) -> None:
         # Restore window from Ghost Mode
-        self._window.setWindowOpacity(1.0)
-        self._window.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
         
         self._overlay.dismiss()
-        self._overlay.set_ghost_cursor(None, None)
         
         self._window.mascot.set_state(MascotState.ERROR)
         self._chat.add_system_log(
@@ -408,3 +403,14 @@ class OdusApp(QObject):
 
     async def _on_status_update(self, event: OdusEvent) -> None:
         self._chat.add_system_log(event.payload.get("message", ""))
+
+    async def _on_window_hide_for_capture(self, event: OdusEvent) -> None:
+        """Hide the Odus window so screen capture doesn't include our own UI."""
+        self._window.hide()
+        self._overlay.hide()
+
+    async def _on_window_show_after_capture(self, event: OdusEvent) -> None:
+        """Restore the Odus window after screen capture is complete."""
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()

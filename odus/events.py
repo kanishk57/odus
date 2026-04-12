@@ -62,6 +62,8 @@ class EventType(Enum):
 
     # UI events
     TAB_SWITCH = "tab_switch"                           # Switch between chat/terminal tabs
+    WINDOW_HIDE_FOR_CAPTURE = "window_hide_for_capture" # Hide Odus window before screenshot
+    WINDOW_SHOW_AFTER_CAPTURE = "window_show_after_capture" # Show Odus window after screenshot
 
     # System events
     ERROR = "error"
