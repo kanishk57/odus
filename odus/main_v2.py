@@ -1,12 +1,5 @@
 """
-Odus — Main Entry Point.
-
-Wires together all layers:
-  Perception (hotkey + capture) → Reasoning (Gemini Vision + agent) →
-  Action (executor + safety + PTY + input sim) → UI (unified window)
-
-Usage:
-    python -m odus.main
+Odus (v2) — Main Entry Point for Sidebar UI.
 """
 
 from __future__ import annotations
@@ -15,16 +8,14 @@ import asyncio
 import logging
 import sys
 import os
+import signal
 
 os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3"
 os.environ["GTK_THEME"] = "Adwaita:dark"
 
 from dotenv import load_dotenv
-
-# Load .env before anything else
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -32,39 +23,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger("odus")
 
-
 from PyQt6.QtWidgets import QApplication
 import qasync
 
-
 async def app_main() -> None:
-    """PyQt6 async entry point — sets up all subsystems."""
+    """Sets up all subsystems with v2 Sidebar/Window UI."""
 
-    # 1. Initialize UI (creates unified window)
-    from odus.ui.app import OdusApp
-    odus_app = OdusApp()
+    # 1. Initialize UI (v2)
+    from odus.ui_v2.app import OdusAppV2
+    ui_type = os.getenv("ODUS_UI_TYPE", "window") # Default to window now as fallback
+    odus_app = OdusAppV2(ui_type=ui_type)
     odus_app.start()
 
-    # 2. Start the agentic loop (runs in background)
+    # 2. Start the agentic loop
     from odus.reasoning.agent import Agent
     agent = Agent()
     asyncio.create_task(agent.start())
 
-    # 3. Start the hotkey listener (background thread)
+    # 3. Start the hotkey listener
     from odus.perception.hotkey import HotkeyListener
     hotkey = HotkeyListener()
     hotkey.start()
 
-    logger.info("🦉 Odus is ready! Press Ctrl+Shift+O to capture your screen.")
-
-
-import signal
+    logger.info("🦉 Odus v2 Sidebar is ready! Press Ctrl+Shift+O to capture your screen.")
 
 def main() -> None:
     """CLI entry point."""
     app = QApplication(sys.argv)
     
-    # Handle SIGTERM
     def handle_sigterm(*args):
         logger.info("Received SIGTERM, shutting down...")
         QApplication.quit()
@@ -82,7 +68,6 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Odus shutting down...")
         sys.exit(0)
-
 
 if __name__ == "__main__":
     main()
