@@ -15,6 +15,26 @@ Press Hotkey → Screen Captured → Gemini Analyzes → One-Click Fix
 3. **Escalation & Tooling** — Evaluates logic dynamically. Uses native `FunctionDeclarations` (Tool Calling) vs brittle JSON parsing. Escalates reasoning automatically to **Gemini 2.5 Pro** if confidence score drops below 60%.
 4. **Sandboxed Remediation** — Outputs heuristic, sandboxed repair commands intercepted by a strict deterministic Safety Gate before reaching your terminal.
 
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshots/01_welcome.png" alt="Odus Welcome Screen" width="45%">
+  &nbsp;&nbsp;
+  <img src="assets/screenshots/02_desktop_overview.png" alt="Odus Desktop Overview" width="45%">
+</p>
+<p align="center">
+  <em>Welcome screen with owl mascot</em> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <em>Side-by-side with terminal on Wayland</em>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/03_action_plan.png" alt="Odus Action Plan" width="45%">
+  &nbsp;&nbsp;
+  <img src="assets/screenshots/04_desktop_action.png" alt="Odus Desktop Action" width="45%">
+</p>
+<p align="center">
+  <em>Multi-step action plan with Learn/Look/Fix tags</em> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <em>Desktop Action with Allow/Deny safety prompt</em>
+</p>
+
 ## Prerequisites
 
 - Python 3.11+
